@@ -177,6 +177,23 @@ def rozetka_feed():
                 # Insert SKU and manufacturer
                 create_xml_element(offer, 'sku', sku)
                 create_xml_element(offer, 'vendor', os.getenv('COMPANY_NAME', 'Znana'))
+                # Color and size
+                color = var_attr.get('color') or None
+                if not color:
+                    for cf in var_attr.get('custom_fields', []):
+                        if cf.get('uuid', '').lower() == 'color':
+                            color = cf.get('value')
+                            break
+                if color:
+                    create_xml_element(offer, 'color', color)
+                size = var_attr.get('size') or None
+                if not size:
+                    for cf in var_attr.get('custom_fields', []):
+                        if cf.get('uuid', '').lower() == 'size':
+                            size = cf.get('value')
+                            break
+                if size:
+                    create_xml_element(offer, 'size', size)
                 create_xml_element(offer, 'price', f"{price:.2f}")
                 create_xml_element(offer, 'stock', str(stock))
                 create_xml_element(offer, 'name', attr.get('name') or product_name)
