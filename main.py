@@ -155,26 +155,25 @@ def rozetka_feed():
                 stock = int(attr.get('stock', product_stock) or 0)
                 price = float(attr.get('price', product_price) or 0)
                 offer = ET.SubElement(offers_elem, 'offer', id=str(sku), available='true' if stock>0 else 'false')
-                # SKU and vendor
+                                # SKU and vendor
                 create_xml_element(offer, 'sku', sku)
                 create_xml_element(offer, 'vendor', os.getenv('COMPANY_NAME', 'Znana'))
-                # Color and size
+
+                # Color and size for all products
                 color = attr.get('color')
-                if not color:
-                    for cf in attr.get('custom_fields', []):
-                        if cf.get('uuid','').lower()=='color':
-                            color = cf.get('value')
-                            break
+                size = attr.get('size')
+                # Fallback to custom_fields if direct keys missing
+                for cf in attr.get('custom_fields', []):
+                    uuid = cf.get('uuid', '').lower()
+                    if uuid == 'color' and not color:
+                        color = cf.get('value')
+                    if uuid == 'size' and not size:
+                        size = cf.get('value')
                 if color:
                     create_xml_element(offer, 'color', color)
-                size = attr.get('size')
-                if not size:
-                    for cf in attr.get('custom_fields', []):
-                        if cf.get('uuid','').lower()=='size':
-                            size = cf.get('value')
-                            break
                 if size:
                     create_xml_element(offer, 'size', size)
+
                 # Price and stock
                 create_xml_element(offer, 'price', f"{price:.2f}")
                 create_xml_element(offer, 'stock', str(stock))
