@@ -23,7 +23,7 @@ HEADERS = {
     'Accept': 'application/json'
 }
 
-# Отримати всі продукти (кожен продукт — окремий варіант)
+# Отримуємо всі товари (SKU) як окремі пропозиції
 def fetch_products():
     products = []
     page = 1
@@ -52,15 +52,18 @@ def fetch_products():
 def rozetka_feed():
     try:
         products = fetch_products()
+        # Створюємо XML
         root = ET.Element('yml_catalog', date=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
         shop = ET.SubElement(root, 'shop')
         ET.SubElement(shop, 'name').text = os.getenv('SHOP_NAME', 'Znana')
         ET.SubElement(shop, 'company').text = os.getenv('COMPANY_NAME', 'Znana')
         ET.SubElement(shop, 'url').text = os.getenv('SHOP_URL', 'Znana Maternity')
 
+        # Валюти
         currencies = ET.SubElement(shop, 'currencies')
         ET.SubElement(currencies, 'currency', id='UAH', rate='1')
 
+        # Пропозиції
         offers = ET.SubElement(shop, 'offers')
         for p in products:
             sku = p.get('sku')
@@ -69,55 +72,45 @@ def rozetka_feed():
             available = 'true' if p.get('stock', 0) > 0 else 'false'
             offer = ET.SubElement(offers, 'offer', id=sku, available=available)
 
-            # Базові поля
+            # Ціна та залишок
             ET.SubElement(offer, 'price').text = f"{p.get('price', 0):.2f}"
             ET.SubElement(offer, 'stock').text = str(p.get('stock', 0))
 
-            # Назва, опис
-            name = p.get('name')
-            if name:
-                ET.SubElement(offer, 'name').text = name
-            description = p.get('description')
-            if description:
-                ET.SubElement(offer, 'description').text = description
+            # Назва та опис
+            if p.get('name'):
+                ET.SubElement(offer, 'name').text = p['name']
+            if p.get('description'):
+                ET.SubElement(offer, 'description').text = p['description']
 
-            # Штрихкод
-            barcode = p.get('barcode')
-            if barcode:
-                ET.SubElement(offer, 'barcode').text = barcode
+            # Штрихкод (barcode)
+            if p.get('barcode'):
+                ET.SubElement(offer, 'barcode').text = p['barcode']
 
-            # Валюта та ціна закупівлі
-            currency = p.get('currency_code')
-            if currency:
-                ET.SubElement(offer, 'currencyId').text = currency
-            purchase_price = p.get('purchased_price')
-            if purchase_price is not None:
-                ET.SubElement(offer, 'purchase_price').text = f"{purchase_price:.2f}"
+            # Валюта та закупівельна ціна
+            if p.get('currency_code'):
+                ET.SubElement(offer, 'currencyId').text = p['currency_code']
+            if p.get('purchased_price') is not None:
+                ET.SubElement(offer, 'purchase_price').text = f"{p['purchased_price']:.2f}"
 
-            # Розміри та вага
-            unit = p.get('unit_type')
-            if unit:
-                ET.SubElement(offer, 'unit').text = unit
+            # Одиниця виміру, вага, розміри
+            if p.get('unit_type'):
+                ET.SubElement(offer, 'unit').text = p['unit_type']
             for dim in ('weight', 'length', 'width', 'height'):
-                val = p.get(dim)
-                if val is not None:
-                    ET.SubElement(offer, dim).text = str(val)
+                if p.get(dim) is not None:
+                    ET.SubElement(offer, dim).text = str(p[dim])
 
             # Категорія
-            cat = p.get('category_id')
-            if cat:
-                ET.SubElement(offer, 'categoryId').text = str(cat)
+            if p.get('category_id'):
+                ET.SubElement(offer, 'categoryId').text = str(p['category_id'])
 
-            # Кастомні поля (наприклад, color/size)
+            # Кастомні поля
             for cf in p.get('custom_fields', []):
-                uuid = cf.get('uuid')
-                val = cf.get('value')
-                if uuid and val:
-                    ET.SubElement(offer, 'param', name=uuid).text = val
+                if cf.get('uuid') and cf.get('value'):
+                    ET.SubElement(offer, 'param', name=cf['uuid']).text = cf['value']
 
             # Фото
-            for pic_url in p.get('pictures', []):
-                ET.SubElement(offer, 'picture').text = pic_url
+            for url in p.get('pictures', []):
+                ET.SubElement(offer, 'picture').text = url
 
         xml_bytes = ET.tostring(root, encoding='utf-8', xml_declaration=True)
         return Response(xml_bytes, mimetype='application/xml')
