@@ -24,7 +24,7 @@ HEADERS = {
     'Accept': 'application/json'
 }
 
-# Fetch all products (base items with minimal attributes)
+# Fetch all products with pagination
 def fetch_products():
     products = []
     page = 1
@@ -47,28 +47,45 @@ def fetch_products():
         if not pagination.get('next_page'):
             break
         page += 1
+    app.logger.info(f"Total products fetched: {len(products)}")
     return products
 
-# Fetch variants (offers) of a single product using the correct endpoint
-def fetch_variants(product_id):
-    resp = requests.get(
-        f"{API_URL}/products/{product_id}/offers",
-        headers=HEADERS
-    )
-    if resp.status_code == 404:
-        # No variants for this product
-        return []
-    if resp.status_code != 200:
-        app.logger.error(f"Error fetching variants for {product_id}: {resp.status_code} {resp.text}")
-        resp.raise_for_status()
-    return resp.json().get('data', [])
+# Fetch offers (variants) for a single product via GET /offers?filter[product_id]=
+def fetch_offers_for_product(product_id):
+    offers = []
+    page = 1
+    per_page = 100
+    while True:
+        resp = requests.get(
+            f"{API_URL}/offers",
+            headers=HEADERS,
+            params={
+                'filter[product_id]': product_id,
+                'per_page': per_page,
+                'page': page
+            }
+        )
+        if resp.status_code != 200:
+            app.logger.error(f"Error fetching offers for product {product_id}: {resp.status_code} {resp.text}")
+            break
+        payload = resp.json()
+        items = payload.get('data', [])
+        if not items:
+            break
+        offers.extend(items)
+        pagination = payload.get('meta', {}).get('pagination', {})
+        if not pagination.get('next_page'):
+            break
+        page += 1
+    return offers
 
 @app.route('/export/rozetka.xml', methods=['GET'])
 def rozetka_feed():
     try:
+        # Retrieve all products
         products = fetch_products()
 
-        # Build root
+        # Build YML catalog root
         root = ET.Element('yml_catalog', date=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
         shop = ET.SubElement(root, 'shop')
         ET.SubElement(shop, 'name').text = os.getenv('SHOP_NAME', 'Znana')
@@ -79,15 +96,16 @@ def rozetka_feed():
         currencies = ET.SubElement(shop, 'currencies')
         ET.SubElement(currencies, 'currency', id='UAH', rate='1')
 
-        # Offers
+        # Offers section
         offers_elem = ET.SubElement(shop, 'offers')
         for product in products:
+            # Common product-level data
             prod_attr = product.get('attributes', {})
-            # General product fields (e.g., description, images)
             common_desc = prod_attr.get('description')
             common_pics = prod_attr.get('pictures', [])
 
-            variants = fetch_variants(product.get('id'))
+            # Fetch all variant offers
+            variants = fetch_offers_for_product(product.get('id'))
             for var in variants:
                 var_attr = var.get('attributes', {})
                 sku = var_attr.get('sku')
@@ -100,11 +118,10 @@ def rozetka_feed():
                 ET.SubElement(offer, 'price').text = f"{var_attr.get('price', 0):.2f}"
                 ET.SubElement(offer, 'stock').text = str(var_attr.get('stock', 0))
 
-                # Name
+                # Name and description
                 name = var_attr.get('name') or prod_attr.get('name')
                 if name:
                     ET.SubElement(offer, 'name').text = name
-                # Description
                 desc = var_attr.get('description') or common_desc
                 if desc:
                     ET.SubElement(offer, 'description').text = desc
@@ -135,11 +152,12 @@ def rozetka_feed():
                     if cf.get('uuid') and cf.get('value'):
                         ET.SubElement(offer, 'param', name=cf['uuid']).text = cf['value']
 
-                # Pictures: variant-level or product-level
+                # Pictures: variant-level or fallback to product-level
                 pics = var_attr.get('pictures') or common_pics or []
                 for pic_url in pics:
                     ET.SubElement(offer, 'picture').text = pic_url
 
+        # Serialize XML and return response
         xml_bytes = ET.tostring(root, encoding='utf-8', xml_declaration=True)
         return Response(xml_bytes, mimetype='application/xml')
 
