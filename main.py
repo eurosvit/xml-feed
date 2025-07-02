@@ -51,10 +51,36 @@ def fetch_products():
     app.logger.info(f'Total products fetched: {len(products)}')
     return products
 
+# Fetch all categories
+def fetch_categories():
+    categories = []
+    page = 1
+    per_page = 100
+    while True:
+        resp = requests.get(
+            f"{API_URL}/categories",
+            headers=HEADERS,
+            params={'per_page': per_page, 'page': page}
+        )
+        if resp.status_code != 200:
+            app.logger.error(f"Key CRM /categories error {resp.status_code}: {resp.text}")
+            resp.raise_for_status()
+        data = resp.json()
+        items = data.get('data', [])
+        if not items:
+            break
+        categories.extend(items)
+        pagination = data.get('meta', {}).get('pagination', {})
+        if not pagination.get('next_page'):
+            break
+        page += 1
+    return categories
+
 @app.route('/export/rozetka.xml', methods=['GET'])
 def rozetka_feed():
     try:
         products = fetch_products()
+        categories_list = fetch_categories()
 
         # Build YML catalog
         root = ET.Element('yml_catalog', date=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
@@ -66,6 +92,17 @@ def rozetka_feed():
         # Currencies
         currencies = ET.SubElement(shop, 'currencies')
         ET.SubElement(currencies, 'currency', id='UAH', rate='1')
+
+        # Categories
+        cats_elem = ET.SubElement(shop, 'categories')
+        for c in categories_list:
+            cid = c.get('id')
+            name = c.get('name') or c.get('title')
+            parent = c.get('parent_id')
+            attrs = {'id': str(cid)}
+            if parent:
+                attrs['parentId'] = str(parent)
+            ET.SubElement(cats_elem, 'category', **attrs).text = name
 
         # Offers section
         offers = ET.SubElement(shop, 'offers')
@@ -103,7 +140,7 @@ def rozetka_feed():
                 if p.get(dim) is not None:
                     ET.SubElement(offer, dim).text = str(p[dim])
 
-            # Category
+            # Category reference
             if p.get('category_id'):
                 ET.SubElement(offer, 'categoryId').text = str(p['category_id'])
 
