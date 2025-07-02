@@ -18,107 +18,127 @@ if not API_KEY:
     app.logger.error('KEYCRM_API_KEY is not set')
     raise RuntimeError('Environment variable KEYCRM_API_KEY is required')
 
-# Prepare headers for Key CRM API
+# Common headers for Key CRM API
 HEADERS = {
     'Authorization': f'Bearer {API_KEY}',
     'Accept': 'application/json'
 }
 
-# Fetch all products with pagination
-# Each product record has 'attributes' dict where price, stock, sku live
+# Fetch all products (base items with minimal attributes)
 def fetch_products():
     products = []
     page = 1
     per_page = 100
     while True:
-        app.logger.info(f'Fetching products page {page}')
         resp = requests.get(
             f"{API_URL}/products",
             headers=HEADERS,
             params={'per_page': per_page, 'page': page}
         )
         if resp.status_code != 200:
-            app.logger.error(f"Key CRM /products error {resp.status_code}: {resp.text}")
+            app.logger.error(f"Error fetching products: {resp.status_code} {resp.text}")
             resp.raise_for_status()
-        data = resp.json()
-        items = data.get('data', [])  # list of resource objects
+        payload = resp.json()
+        items = payload.get('data', [])
         if not items:
             break
         products.extend(items)
-        pagination = data.get('meta', {}).get('pagination', {})
+        pagination = payload.get('meta', {}).get('pagination', {})
         if not pagination.get('next_page'):
             break
         page += 1
-    app.logger.info(f'Total products fetched: {len(products)}')
     return products
+
+# Fetch variants (offers) of a single product using the correct endpoint
+def fetch_variants(product_id):
+    resp = requests.get(
+        f"{API_URL}/products/{product_id}/offers",
+        headers=HEADERS
+    )
+    if resp.status_code == 404:
+        # No variants for this product
+        return []
+    if resp.status_code != 200:
+        app.logger.error(f"Error fetching variants for {product_id}: {resp.status_code} {resp.text}")
+        resp.raise_for_status()
+    return resp.json().get('data', [])
 
 @app.route('/export/rozetka.xml', methods=['GET'])
 def rozetka_feed():
     try:
         products = fetch_products()
 
-        # Build YML catalog
+        # Build root
         root = ET.Element('yml_catalog', date=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
         shop = ET.SubElement(root, 'shop')
         ET.SubElement(shop, 'name').text = os.getenv('SHOP_NAME', 'Znana')
         ET.SubElement(shop, 'company').text = os.getenv('COMPANY_NAME', 'Znana')
-        ET.SubElement(shop, 'url').text = os.getenv('SHOP_URL', 'Znana Maternity')
+        ET.SubElement(shop, 'url').text = os.getenv('SHOP_URL', 'https://yourshop.ua')
 
         # Currencies
         currencies = ET.SubElement(shop, 'currencies')
         ET.SubElement(currencies, 'currency', id='UAH', rate='1')
 
-        # Offers section
-        offers = ET.SubElement(shop, 'offers')
-        for record in products:
-            attr = record.get('attributes', {})
-            sku = attr.get('sku')
-            if not sku:
-                continue
-            available = 'true' if attr.get('stock', 0) > 0 else 'false'
-            offer = ET.SubElement(offers, 'offer', id=sku, available=available)
+        # Offers
+        offers_elem = ET.SubElement(shop, 'offers')
+        for product in products:
+            prod_attr = product.get('attributes', {})
+            # General product fields (e.g., description, images)
+            common_desc = prod_attr.get('description')
+            common_pics = prod_attr.get('pictures', [])
 
-            # Price and stock
-            price = attr.get('price', 0)
-            stock = attr.get('stock', 0)
-            ET.SubElement(offer, 'price').text = f"{price:.2f}"
-            ET.SubElement(offer, 'stock').text = str(stock)
+            variants = fetch_variants(product.get('id'))
+            for var in variants:
+                var_attr = var.get('attributes', {})
+                sku = var_attr.get('sku')
+                if not sku:
+                    continue
+                available = 'true' if var_attr.get('stock', 0) > 0 else 'false'
+                offer = ET.SubElement(offers_elem, 'offer', id=sku, available=available)
 
-            # Name and description
-            if attr.get('name'):
-                ET.SubElement(offer, 'name').text = attr['name']
-            if attr.get('description'):
-                ET.SubElement(offer, 'description').text = attr['description']
+                # Price and stock
+                ET.SubElement(offer, 'price').text = f"{var_attr.get('price', 0):.2f}"
+                ET.SubElement(offer, 'stock').text = str(var_attr.get('stock', 0))
 
-            # Barcode
-            if attr.get('barcode'):
-                ET.SubElement(offer, 'barcode').text = attr['barcode']
+                # Name
+                name = var_attr.get('name') or prod_attr.get('name')
+                if name:
+                    ET.SubElement(offer, 'name').text = name
+                # Description
+                desc = var_attr.get('description') or common_desc
+                if desc:
+                    ET.SubElement(offer, 'description').text = desc
 
-            # Currency and purchase price
-            if attr.get('currency_code'):
-                ET.SubElement(offer, 'currencyId').text = attr['currency_code']
-            if attr.get('purchased_price') is not None:
-                ET.SubElement(offer, 'purchase_price').text = f"{attr['purchased_price']:.2f}"
+                # Barcode
+                if var_attr.get('barcode'):
+                    ET.SubElement(offer, 'barcode').text = var_attr['barcode']
 
-            # Unit, dimensions and weight
-            if attr.get('unit_type'):
-                ET.SubElement(offer, 'unit').text = attr['unit_type']
-            for dim in ('weight', 'length', 'width', 'height'):
-                if attr.get(dim) is not None:
-                    ET.SubElement(offer, dim).text = str(attr[dim])
+                # Currency and purchase price
+                if var_attr.get('currency_code'):
+                    ET.SubElement(offer, 'currencyId').text = var_attr['currency_code']
+                if var_attr.get('purchased_price') is not None:
+                    ET.SubElement(offer, 'purchase_price').text = f"{var_attr['purchased_price']:.2f}"
 
-            # Category reference
-            if attr.get('category_id'):
-                ET.SubElement(offer, 'categoryId').text = str(attr['category_id'])
+                # Unit, dimensions, weight
+                if var_attr.get('unit_type'):
+                    ET.SubElement(offer, 'unit').text = var_attr['unit_type']
+                for dim in ('weight', 'length', 'width', 'height'):
+                    if var_attr.get(dim) is not None:
+                        ET.SubElement(offer, dim).text = str(var_attr[dim])
 
-            # Custom fields
-            for cf in attr.get('custom_fields', []):
-                if cf.get('uuid') and cf.get('value'):
-                    ET.SubElement(offer, 'param', name=cf['uuid']).text = cf['value']
+                # Category
+                if var_attr.get('category_id'):
+                    ET.SubElement(offer, 'categoryId').text = str(var_attr['category_id'])
 
-            # Pictures (if returned inline)
-            for pic_url in attr.get('pictures', []):
-                ET.SubElement(offer, 'picture').text = pic_url
+                # Custom fields
+                for cf in var_attr.get('custom_fields', []):
+                    if cf.get('uuid') and cf.get('value'):
+                        ET.SubElement(offer, 'param', name=cf['uuid']).text = cf['value']
+
+                # Pictures: variant-level or product-level
+                pics = var_attr.get('pictures') or common_pics or []
+                for pic_url in pics:
+                    ET.SubElement(offer, 'picture').text = pic_url
 
         xml_bytes = ET.tostring(root, encoding='utf-8', xml_declaration=True)
         return Response(xml_bytes, mimetype='application/xml')
