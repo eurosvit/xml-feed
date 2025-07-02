@@ -67,14 +67,13 @@ def fetch_products():
     while True:
         logger.info(f"Fetching products page {page}")
         
-        # Add include parameter to get full product data
+        # Simple request without include parameter
         response = safe_request(
             f"{API_URL}/products",
             headers=HEADERS,
             params={
                 'per_page': per_page, 
-                'page': page,
-                'include': 'offers,pictures,categories'  # Include related data
+                'page': page
             }
         )
         
@@ -129,8 +128,7 @@ def fetch_offers_for_product(product_id):
             params={
                 'filter[product_id]': product_id,
                 'per_page': per_page,
-                'page': page,
-                'include': 'pictures,custom_fields'  # Include related data
+                'page': page
             }
         )
         
@@ -288,26 +286,30 @@ def rozetka_feed():
                 
                 logger.debug(f"Variant {variant_id} attributes keys: {list(var_attr.keys())}")
                 
-                # Get SKU or use variant ID
+                # Get SKU or use variant ID - SKU обов'язково для ідентифікації
                 sku = (var_attr.get('sku') or 
                        var_attr.get('article') or 
-                       var_attr.get('code') or 
-                       str(variant_id))
+                       var_attr.get('code') or
+                       var_attr.get('vendor_code'))
                 
                 if not sku:
-                    logger.warning(f"No SKU found for variant {variant_id}")
+                    logger.warning(f"ПРОПУСКАЄМО variant {variant_id} - відсутній SKU!")
+                    logger.debug(f"Доступні поля варіанта: {list(var_attr.keys())}")
                     continue
                 
-                # Check availability and stock
+                # Check availability and stock - пріоритет stock > quantity > available_quantity
                 stock = (var_attr.get('stock') or 
                         var_attr.get('quantity') or 
-                        var_attr.get('available_quantity') or 0)
+                        var_attr.get('available_quantity') or
+                        var_attr.get('balance') or
+                        var_attr.get('остаток') or 0)
                 
                 try:
-                    stock = int(stock) if stock is not None else 0
+                    stock = int(float(stock)) if stock is not None else 0
                 except (ValueError, TypeError):
                     stock = 0
                     
+                logger.debug(f"SKU {sku}: stock={stock}")
                 available = 'true' if stock > 0 else 'false'
                 
                 # Create offer element
@@ -315,16 +317,25 @@ def rozetka_feed():
                 offer.set('id', str(sku))
                 offer.set('available', available)
 
-                # Price handling - try multiple price fields
+                # Price handling - розширений пошук по всіх можливих полях ціни
                 price = (var_attr.get('price') or 
                         var_attr.get('selling_price') or 
-                        var_attr.get('sale_price') or 
+                        var_attr.get('sale_price') or
+                        var_attr.get('retail_price') or
+                        var_attr.get('розничная_цена') or
+                        var_attr.get('цена') or
                         product_price or 0)
                 
                 try:
                     price = float(price) if price is not None else 0.0
                 except (ValueError, TypeError):
                     price = 0.0
+                
+                logger.debug(f"SKU {sku}: price={price}")
+                
+                if price <= 0:
+                    logger.warning(f"SKU {sku}: ціна = 0, доступні поля: {list(var_attr.keys())}")
+                
                 create_xml_element(offer, 'price', f"{price:.2f}")
                 
                 # Discount price if available
@@ -432,8 +443,7 @@ def debug_products():
             headers=HEADERS,
             params={
                 'per_page': 3,
-                'page': 1,
-                'include': 'offers,pictures,categories'
+                'page': 1
             }
         )
         
@@ -472,8 +482,7 @@ def debug_offers(product_id):
             params={
                 'filter[product_id]': product_id,
                 'per_page': 3,
-                'page': 1,
-                'include': 'pictures,custom_fields'
+                'page': 1
             }
         )
         
