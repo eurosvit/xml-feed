@@ -24,7 +24,7 @@ HEADERS = {
     'Accept': 'application/json'
 }
 
-# Fetch all products (each product treated as one SKU)
+# Fetch all products with pagination
 def fetch_products():
     products = []
     page = 1
