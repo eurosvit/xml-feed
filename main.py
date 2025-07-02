@@ -68,20 +68,15 @@ def fetch_products():
             break
         try:
             payload = response.json()
-            logger.debug(f"API Response structure: {list(payload.keys())}")
         except ValueError as e:
             logger.error(f"Invalid JSON response: {e}")
             break
         items = payload.get('data', [])
         if not items:
-            logger.info("No more products found")
             break
-        if page == 1 and items:
-            logger.info(f"First product structure: {items[0]}")
         products.extend(items)
-        logger.info(f"Fetched {len(items)} products from page {page}")
         meta = payload.get('meta', {}).get('pagination', {})
-        if not meta.get('next_page') or meta.get('current_page') >= meta.get('last_page', 1):
+        if not meta.get('next_page'):
             break
         page += 1
         time.sleep(0.1)
@@ -94,24 +89,19 @@ def fetch_offers_for_product(product_id):
     page = 1
     per_page = 50
     while True:
-        logger.debug(f"Fetching offers for product {product_id}, page {page}")
         response = safe_request(f"{API_URL}/offers", HEADERS, params={'filter[product_id]': product_id, 'per_page': per_page, 'page': page})
         if not response:
-            logger.warning(f"Failed to fetch offers for product {product_id}")
             break
         try:
             payload = response.json()
-            if page == 1 and payload.get('data'):
-                logger.debug(f"First offer structure for product {product_id}: {payload['data'][0]}")
-        except ValueError as e:
-            logger.error(f"Invalid JSON response for offers: {e}")
+        except ValueError:
             break
         items = payload.get('data', [])
         if not items:
             break
         offers.extend(items)
         meta = payload.get('meta', {}).get('pagination', {})
-        if not meta.get('next_page') or meta.get('current_page') >= meta.get('last_page', 1):
+        if not meta.get('next_page'):
             break
         page += 1
         time.sleep(0.05)
@@ -119,11 +109,9 @@ def fetch_offers_for_product(product_id):
     return offers
 
 def safe_text(text):
-    """Safely convert text for XML, handling None values and encoding"""
     return str(text).strip() if text is not None else ""
 
 def create_xml_element(parent, tag, text=None, **attrs):
-    """Safely create XML element with attributes"""
     element = ET.SubElement(parent, tag, **attrs)
     if text is not None:
         element.text = safe_text(text)
@@ -132,11 +120,7 @@ def create_xml_element(parent, tag, text=None, **attrs):
 @app.route('/export/rozetka.xml', methods=['GET'])
 def rozetka_feed():
     try:
-        logger.info("Starting XML feed generation")
         products = fetch_products()
-        if not products:
-            logger.warning("No products found")
-            return Response("No products found", status=404)
         root = ET.Element('yml_catalog')
         root.set('date', datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
         shop = ET.SubElement(root, 'shop')
@@ -148,8 +132,7 @@ def rozetka_feed():
         create_xml_element(shop, 'categories')
         offers_elem = ET.SubElement(shop, 'offers')
         offer_count = 0
-        for i, product in enumerate(products):
-            logger.info(f"Processing product {i+1}/{len(products)}: {product.get('id')}")
+        for product in products:
             if 'attributes' in product:
                 prod_attr = product['attributes']
                 product_id = product.get('id')
@@ -158,60 +141,61 @@ def rozetka_feed():
                 product_id = product.get('id')
             common_desc = prod_attr.get('description', '')
             common_pics = prod_attr.get('pictures', [])
-            product_name = prod_attr.get('name', f'Product {product_id}')
-            product_price = prod_attr.get('price', 0) or prod_attr.get('selling_price', 0)
-            product_stock = prod_attr.get('stock', 0) or prod_attr.get('quantity', 0)
+            product_name = prod_attr.get('name', '')
+            product_price = prod_attr.get('price', 0)
+            product_stock = prod_attr.get('stock', 0)
             variants = fetch_offers_for_product(product_id)
             if not variants:
-                logger.info(f"No variants found for product {product_id}, using product data")
                 variants = [{'attributes': prod_attr, 'id': product_id}]
             for var in variants:
                 attr = var.get('attributes', var)
-                sku = attr.get('sku')
+                sku = attr.get('sku') or ''
                 if not sku:
-                    logger.warning(f"Skipping variant {var.get('id')} - missing SKU")
                     continue
                 stock = int(attr.get('stock', product_stock) or 0)
                 price = float(attr.get('price', product_price) or 0)
-                offer = ET.SubElement(offers_elem, 'offer', id=str(sku), available='true' if stock > 0 else 'false')
-                # Insert SKU and manufacturer
+                offer = ET.SubElement(offers_elem, 'offer', id=str(sku), available='true' if stock>0 else 'false')
+                # SKU and vendor
                 create_xml_element(offer, 'sku', sku)
                 create_xml_element(offer, 'vendor', os.getenv('COMPANY_NAME', 'Znana'))
                 # Color and size
-                color = var_attr.get('color') or None
+                color = attr.get('color')
                 if not color:
-                    for cf in var_attr.get('custom_fields', []):
-                        if cf.get('uuid', '').lower() == 'color':
+                    for cf in attr.get('custom_fields', []):
+                        if cf.get('uuid','').lower()=='color':
                             color = cf.get('value')
                             break
                 if color:
                     create_xml_element(offer, 'color', color)
-                size = var_attr.get('size') or None
+                size = attr.get('size')
                 if not size:
-                    for cf in var_attr.get('custom_fields', []):
-                        if cf.get('uuid', '').lower() == 'size':
+                    for cf in attr.get('custom_fields', []):
+                        if cf.get('uuid','').lower()=='size':
                             size = cf.get('value')
                             break
                 if size:
                     create_xml_element(offer, 'size', size)
+                # Price and stock
                 create_xml_element(offer, 'price', f"{price:.2f}")
                 create_xml_element(offer, 'stock', str(stock))
+                # Name and description
                 create_xml_element(offer, 'name', attr.get('name') or product_name)
                 desc = attr.get('description') or common_desc
                 if desc:
                     create_xml_element(offer, 'description', desc)
+                # Barcode
                 if attr.get('barcode'):
                     create_xml_element(offer, 'barcode', attr['barcode'])
-                create_xml_element(offer, 'currencyId', attr.get('currency_code', 'UAH'))
-                pics = attr.get('pictures', []) or common_pics
+                create_xml_element(offer, 'currencyId', attr.get('currency_code','UAH'))
+                # Pictures
+                pics = attr.get('pictures',[]) or common_pics
                 for url in pics:
                     if url:
                         create_xml_element(offer, 'picture', url)
                 offer_count += 1
-        logger.info(f"Generated XML feed with {offer_count} offers")
         xml_str = ET.tostring(root, encoding='unicode')
         xml_header = '<?xml version="1.0" encoding="UTF-8"?>\n'
-        return Response(xml_header + xml_str, mimetype='application/xml; charset=utf-8')
+        return Response(xml_header+xml_str, mimetype='application/xml; charset=utf-8')
     except Exception as e:
         logger.error(f"Error generating feed: {e}", exc_info=True)
         return Response("Internal Server Error", status=500)
@@ -221,5 +205,5 @@ def health():
     return Response('OK', status=200)
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 8080))
+    port = int(os.getenv('PORT',8080))
     app.run(host='0.0.0.0', port=port)
