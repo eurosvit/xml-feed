@@ -25,6 +25,7 @@ HEADERS = {
 }
 
 # Fetch all products with pagination
+# Each product record has 'attributes' dict where price, stock, sku live
 def fetch_products():
     products = []
     page = 1
@@ -40,7 +41,7 @@ def fetch_products():
             app.logger.error(f"Key CRM /products error {resp.status_code}: {resp.text}")
             resp.raise_for_status()
         data = resp.json()
-        items = data.get('data', [])
+        items = data.get('data', [])  # list of resource objects
         if not items:
             break
         products.extend(items)
@@ -51,41 +52,10 @@ def fetch_products():
     app.logger.info(f'Total products fetched: {len(products)}')
     return products
 
-# Fetch all categories if supported
-def fetch_categories():
-    categories = []
-    page = 1
-    per_page = 100
-    while True:
-        resp = requests.get(
-            f"{API_URL}/categories",
-            headers=HEADERS,
-            params={'per_page': per_page, 'page': page}
-        )
-        if resp.status_code == 404:
-            app.logger.warning('Categories endpoint not found, skipping categories section')
-            return []
-        if resp.status_code != 200:
-            app.logger.error(f"Key CRM /categories error {resp.status_code}: {resp.text}")
-            # skip categories on any error
-            return []
-        data = resp.json()
-        items = data.get('data', [])
-        if not items:
-            break
-        categories.extend(items)
-        pagination = data.get('meta', {}).get('pagination', {})
-        if not pagination.get('next_page'):
-            break
-        page += 1
-    return categories
-
 @app.route('/export/rozetka.xml', methods=['GET'])
 def rozetka_feed():
     try:
-        # Fetch data
         products = fetch_products()
-        categories_list = fetch_categories()
 
         # Build YML catalog
         root = ET.Element('yml_catalog', date=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
@@ -98,68 +68,58 @@ def rozetka_feed():
         currencies = ET.SubElement(shop, 'currencies')
         ET.SubElement(currencies, 'currency', id='UAH', rate='1')
 
-        # Categories (optional)
-        if categories_list:
-            cats_elem = ET.SubElement(shop, 'categories')
-            for c in categories_list:
-                cid = c.get('id')
-                name = c.get('name') or c.get('title')
-                parent = c.get('parent_id')
-                attrs = {'id': str(cid)}
-                if parent:
-                    attrs['parentId'] = str(parent)
-                ET.SubElement(cats_elem, 'category', **attrs).text = name
-
         # Offers section
         offers = ET.SubElement(shop, 'offers')
-        for p in products:
-            sku = p.get('sku')
+        for record in products:
+            attr = record.get('attributes', {})
+            sku = attr.get('sku')
             if not sku:
                 continue
-            available = 'true' if p.get('stock', 0) > 0 else 'false'
+            available = 'true' if attr.get('stock', 0) > 0 else 'false'
             offer = ET.SubElement(offers, 'offer', id=sku, available=available)
 
             # Price and stock
-            ET.SubElement(offer, 'price').text = f"{p.get('price', 0):.2f}"
-            ET.SubElement(offer, 'stock').text = str(p.get('stock', 0))
+            price = attr.get('price', 0)
+            stock = attr.get('stock', 0)
+            ET.SubElement(offer, 'price').text = f"{price:.2f}"
+            ET.SubElement(offer, 'stock').text = str(stock)
 
             # Name and description
-            if p.get('name'):
-                ET.SubElement(offer, 'name').text = p['name']
-            if p.get('description'):
-                ET.SubElement(offer, 'description').text = p['description']
+            if attr.get('name'):
+                ET.SubElement(offer, 'name').text = attr['name']
+            if attr.get('description'):
+                ET.SubElement(offer, 'description').text = attr['description']
 
             # Barcode
-            if p.get('barcode'):
-                ET.SubElement(offer, 'barcode').text = p['barcode']
+            if attr.get('barcode'):
+                ET.SubElement(offer, 'barcode').text = attr['barcode']
 
             # Currency and purchase price
-            if p.get('currency_code'):
-                ET.SubElement(offer, 'currencyId').text = p['currency_code']
-            if p.get('purchased_price') is not None:
-                ET.SubElement(offer, 'purchase_price').text = f"{p['purchased_price']:.2f}"
+            if attr.get('currency_code'):
+                ET.SubElement(offer, 'currencyId').text = attr['currency_code']
+            if attr.get('purchased_price') is not None:
+                ET.SubElement(offer, 'purchase_price').text = f"{attr['purchased_price']:.2f}"
 
             # Unit, dimensions and weight
-            if p.get('unit_type'):
-                ET.SubElement(offer, 'unit').text = p['unit_type']
+            if attr.get('unit_type'):
+                ET.SubElement(offer, 'unit').text = attr['unit_type']
             for dim in ('weight', 'length', 'width', 'height'):
-                if p.get(dim) is not None:
-                    ET.SubElement(offer, dim).text = str(p[dim])
+                if attr.get(dim) is not None:
+                    ET.SubElement(offer, dim).text = str(attr[dim])
 
             # Category reference
-            if p.get('category_id'):
-                ET.SubElement(offer, 'categoryId').text = str(p['category_id'])
+            if attr.get('category_id'):
+                ET.SubElement(offer, 'categoryId').text = str(attr['category_id'])
 
             # Custom fields
-            for cf in p.get('custom_fields', []):
+            for cf in attr.get('custom_fields', []):
                 if cf.get('uuid') and cf.get('value'):
                     ET.SubElement(offer, 'param', name=cf['uuid']).text = cf['value']
 
-            # Pictures
-            for pic_url in p.get('pictures', []):
+            # Pictures (if returned inline)
+            for pic_url in attr.get('pictures', []):
                 ET.SubElement(offer, 'picture').text = pic_url
 
-        # Convert to bytes and return
         xml_bytes = ET.tostring(root, encoding='utf-8', xml_declaration=True)
         return Response(xml_bytes, mimetype='application/xml')
 
