@@ -67,10 +67,15 @@ def fetch_products():
     while True:
         logger.info(f"Fetching products page {page}")
         
+        # Add include parameter to get full product data
         response = safe_request(
             f"{API_URL}/products",
             headers=HEADERS,
-            params={'per_page': per_page, 'page': page}
+            params={
+                'per_page': per_page, 
+                'page': page,
+                'include': 'offers,pictures,categories'  # Include related data
+            }
         )
         
         if not response:
@@ -79,6 +84,7 @@ def fetch_products():
             
         try:
             payload = response.json()
+            logger.debug(f"API Response structure: {list(payload.keys())}")
         except ValueError as e:
             logger.error(f"Invalid JSON response: {e}")
             break
@@ -87,6 +93,10 @@ def fetch_products():
         if not items:
             logger.info("No more products found")
             break
+            
+        # Log first product structure for debugging
+        if page == 1 and items:
+            logger.info(f"First product structure: {items[0]}")
             
         products.extend(items)
         logger.info(f"Fetched {len(items)} products from page {page}")
@@ -119,7 +129,8 @@ def fetch_offers_for_product(product_id):
             params={
                 'filter[product_id]': product_id,
                 'per_page': per_page,
-                'page': page
+                'page': page,
+                'include': 'pictures,custom_fields'  # Include related data
             }
         )
         
@@ -129,6 +140,9 @@ def fetch_offers_for_product(product_id):
             
         try:
             payload = response.json()
+            # Log first offer structure for debugging
+            if page == 1 and payload.get('data') and len(payload['data']) > 0:
+                logger.debug(f"First offer structure for product {product_id}: {payload['data'][0]}")
         except ValueError as e:
             logger.error(f"Invalid JSON response for offers: {e}")
             break
@@ -149,6 +163,7 @@ def fetch_offers_for_product(product_id):
         page += 1
         time.sleep(0.05)  # Small delay
     
+    logger.info(f"Fetched {len(offers)} offers for product {product_id}")
     return offers
 
 def safe_text(text):
@@ -199,51 +214,95 @@ def rozetka_feed():
         for i, product in enumerate(products):
             logger.info(f"Processing product {i+1}/{len(products)}: {product.get('id')}")
             
-            # Get product data safely
-            product_data = product.get('data', {}) if isinstance(product.get('data'), dict) else {}
-            prod_attr = product_data.get('attributes', {}) or product.get('attributes', {})
+            # Get product data safely - handle different API response structures
+            if 'attributes' in product:
+                prod_attr = product['attributes']
+                product_id = product.get('id')
+            elif 'data' in product and isinstance(product['data'], dict):
+                prod_attr = product['data'].get('attributes', {})
+                product_id = product['data'].get('id') or product.get('id')
+            else:
+                prod_attr = product
+                product_id = product.get('id')
+            
+            logger.debug(f"Product {product_id} attributes keys: {list(prod_attr.keys())}")
             
             # Common product-level data
-            common_desc = prod_attr.get('description', '')
-            common_pics = prod_attr.get('pictures', [])
-            product_name = prod_attr.get('name', f'Product {product.get("id")}')
-
+            common_desc = prod_attr.get('description', '') or prod_attr.get('desc', '')
+            common_pics = prod_attr.get('pictures', []) or prod_attr.get('images', [])
+            product_name = prod_attr.get('name', f'Product {product_id}')
+            
+            # Try to get price from product level
+            product_price = prod_attr.get('price', 0) or prod_attr.get('selling_price', 0)
+            product_stock = prod_attr.get('stock', 0) or prod_attr.get('quantity', 0)
+            
             # Fetch all variant offers
-            variants = fetch_offers_for_product(product.get('id'))
+            variants = fetch_offers_for_product(product_id)
             
             if not variants:
                 # If no variants, create offer from product data
-                logger.info(f"No variants found for product {product.get('id')}, using product data")
+                logger.info(f"No variants found for product {product_id}, using product data")
                 offer = ET.SubElement(offers_elem, 'offer')
-                offer.set('id', str(product.get('id')))
-                offer.set('available', 'true')
+                offer.set('id', str(product_id))
+                
+                # Determine availability
+                try:
+                    stock = int(product_stock) if product_stock is not None else 0
+                except (ValueError, TypeError):
+                    stock = 0
+                offer.set('available', 'true' if stock > 0 else 'false')
                 
                 create_xml_element(offer, 'name', product_name)
                 if common_desc:
                     create_xml_element(offer, 'description', common_desc)
-                create_xml_element(offer, 'price', '0.00')  # Default price
+                
+                # Price handling
+                try:
+                    price = float(product_price) if product_price is not None else 0.0
+                except (ValueError, TypeError):
+                    price = 0.0
+                create_xml_element(offer, 'price', f"{price:.2f}")
+                create_xml_element(offer, 'stock', str(stock))
                 create_xml_element(offer, 'currencyId', 'UAH')
                 
                 # Add pictures
-                for pic_url in common_pics:
-                    if pic_url:
-                        create_xml_element(offer, 'picture', pic_url)
+                if isinstance(common_pics, list):
+                    for pic_url in common_pics:
+                        if pic_url:
+                            create_xml_element(offer, 'picture', pic_url)
                 
                 offer_count += 1
                 continue
             
             for var in variants:
-                var_data = var.get('data', {}) if isinstance(var.get('data'), dict) else {}
-                var_attr = var_data.get('attributes', {}) or var.get('attributes', {})
+                # Handle different variant structures
+                if 'attributes' in var:
+                    var_attr = var['attributes']
+                    variant_id = var.get('id')
+                elif 'data' in var and isinstance(var['data'], dict):
+                    var_attr = var['data'].get('attributes', {})
+                    variant_id = var['data'].get('id') or var.get('id')
+                else:
+                    var_attr = var
+                    variant_id = var.get('id')
+                
+                logger.debug(f"Variant {variant_id} attributes keys: {list(var_attr.keys())}")
                 
                 # Get SKU or use variant ID
-                sku = var_attr.get('sku') or var_attr.get('article') or str(var.get('id', ''))
+                sku = (var_attr.get('sku') or 
+                       var_attr.get('article') or 
+                       var_attr.get('code') or 
+                       str(variant_id))
+                
                 if not sku:
-                    logger.warning(f"No SKU found for variant {var.get('id')}")
+                    logger.warning(f"No SKU found for variant {variant_id}")
                     continue
                 
-                # Check availability
-                stock = var_attr.get('stock', 0)
+                # Check availability and stock
+                stock = (var_attr.get('stock') or 
+                        var_attr.get('quantity') or 
+                        var_attr.get('available_quantity') or 0)
+                
                 try:
                     stock = int(stock) if stock is not None else 0
                 except (ValueError, TypeError):
@@ -256,13 +315,29 @@ def rozetka_feed():
                 offer.set('id', str(sku))
                 offer.set('available', available)
 
-                # Price
-                price = var_attr.get('price', 0)
+                # Price handling - try multiple price fields
+                price = (var_attr.get('price') or 
+                        var_attr.get('selling_price') or 
+                        var_attr.get('sale_price') or 
+                        product_price or 0)
+                
                 try:
                     price = float(price) if price is not None else 0.0
                 except (ValueError, TypeError):
                     price = 0.0
                 create_xml_element(offer, 'price', f"{price:.2f}")
+                
+                # Discount price if available
+                discount_price = (var_attr.get('discount_price') or 
+                                var_attr.get('old_price') or 
+                                var_attr.get('compare_price'))
+                if discount_price:
+                    try:
+                        discount_price = float(discount_price)
+                        if discount_price > price:
+                            create_xml_element(offer, 'oldprice', f"{discount_price:.2f}")
+                    except (ValueError, TypeError):
+                        pass
                 
                 # Stock
                 create_xml_element(offer, 'stock', str(stock))
@@ -271,12 +346,14 @@ def rozetka_feed():
                 name = var_attr.get('name') or product_name
                 create_xml_element(offer, 'name', name)
                 
-                desc = var_attr.get('description') or common_desc
+                desc = (var_attr.get('description') or 
+                       var_attr.get('desc') or 
+                       common_desc)
                 if desc:
                     create_xml_element(offer, 'description', desc)
 
                 # Barcode
-                barcode = var_attr.get('barcode')
+                barcode = var_attr.get('barcode') or var_attr.get('ean')
                 if barcode:
                     create_xml_element(offer, 'barcode', barcode)
 
@@ -285,7 +362,9 @@ def rozetka_feed():
                 create_xml_element(offer, 'currencyId', currency)
                 
                 # Purchase price
-                purchase_price = var_attr.get('purchased_price')
+                purchase_price = (var_attr.get('purchased_price') or 
+                                var_attr.get('cost_price') or 
+                                var_attr.get('purchase_price'))
                 if purchase_price is not None:
                     try:
                         purchase_price = float(purchase_price)
@@ -294,7 +373,7 @@ def rozetka_feed():
                         pass
 
                 # Unit and dimensions
-                unit_type = var_attr.get('unit_type')
+                unit_type = var_attr.get('unit_type') or var_attr.get('unit')
                 if unit_type:
                     create_xml_element(offer, 'unit', unit_type)
                 
@@ -304,7 +383,8 @@ def rozetka_feed():
                         create_xml_element(offer, dim, str(dim_value))
 
                 # Category
-                category_id = var_attr.get('category_id')
+                category_id = (var_attr.get('category_id') or 
+                             prod_attr.get('category_id'))
                 if category_id:
                     create_xml_element(offer, 'categoryId', str(category_id))
 
@@ -318,7 +398,10 @@ def rozetka_feed():
                             param.text = safe_text(cf['value'])
 
                 # Pictures: variant-level or fallback to product-level
-                pics = var_attr.get('pictures') or common_pics or []
+                pics = (var_attr.get('pictures') or 
+                       var_attr.get('images') or 
+                       common_pics or [])
+                       
                 if isinstance(pics, list):
                     for pic_url in pics:
                         if pic_url:
@@ -338,14 +421,89 @@ def rozetka_feed():
         logger.error(f"Error generating feed: {e}", exc_info=True)
         return Response(f"Internal Server Error: {str(e)}", status=500)
 
+@app.route('/debug/products', methods=['GET'])
+def debug_products():
+    """Debug endpoint to see raw product data structure"""
+    try:
+        logger.info("Debug: Fetching first few products")
+        
+        response = safe_request(
+            f"{API_URL}/products",
+            headers=HEADERS,
+            params={
+                'per_page': 3,
+                'page': 1,
+                'include': 'offers,pictures,categories'
+            }
+        )
+        
+        if not response:
+            return Response("Failed to fetch products", status=500)
+        
+        payload = response.json()
+        
+        # Pretty print the structure
+        import json
+        debug_info = {
+            'api_response_keys': list(payload.keys()),
+            'first_product': payload.get('data', [{}])[0] if payload.get('data') else None,
+            'meta': payload.get('meta', {}),
+            'total_products': len(payload.get('data', []))
+        }
+        
+        return Response(
+            json.dumps(debug_info, indent=2, ensure_ascii=False),
+            mimetype='application/json; charset=utf-8'
+        )
+        
+    except Exception as e:
+        logger.error(f"Debug error: {e}", exc_info=True)
+        return Response(f"Debug error: {str(e)}", status=500)
+
+@app.route('/debug/offers/<int:product_id>', methods=['GET'])
+def debug_offers(product_id):
+    """Debug endpoint to see raw offers data structure"""
+    try:
+        logger.info(f"Debug: Fetching offers for product {product_id}")
+        
+        response = safe_request(
+            f"{API_URL}/offers",
+            headers=HEADERS,
+            params={
+                'filter[product_id]': product_id,
+                'per_page': 3,
+                'page': 1,
+                'include': 'pictures,custom_fields'
+            }
+        )
+        
+        if not response:
+            return Response("Failed to fetch offers", status=500)
+        
+        payload = response.json()
+        
+        # Pretty print the structure
+        import json
+        debug_info = {
+            'api_response_keys': list(payload.keys()),
+            'first_offer': payload.get('data', [{}])[0] if payload.get('data') else None,
+            'meta': payload.get('meta', {}),
+            'total_offers': len(payload.get('data', []))
+        }
+        
+        return Response(
+            json.dumps(debug_info, indent=2, ensure_ascii=False),
+            mimetype='application/json; charset=utf-8'
+        )
+        
+    except Exception as e:
+        logger.error(f"Debug error: {e}", exc_info=True)
+        return Response(f"Debug error: {str(e)}", status=500)
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return Response("OK", status=200)
-
-@app.errorhandler(404)
-def not_found(error):
-    return Response("Not Found", status=404)
 
 @app.errorhandler(500)
 def internal_error(error):
