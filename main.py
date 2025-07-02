@@ -51,7 +51,7 @@ def fetch_products():
     app.logger.info(f'Total products fetched: {len(products)}')
     return products
 
-# Fetch all categories
+# Fetch all categories if supported
 def fetch_categories():
     categories = []
     page = 1
@@ -62,9 +62,13 @@ def fetch_categories():
             headers=HEADERS,
             params={'per_page': per_page, 'page': page}
         )
+        if resp.status_code == 404:
+            app.logger.warning('Categories endpoint not found, skipping categories section')
+            return []
         if resp.status_code != 200:
             app.logger.error(f"Key CRM /categories error {resp.status_code}: {resp.text}")
-            resp.raise_for_status()
+            # skip categories on any error
+            return []
         data = resp.json()
         items = data.get('data', [])
         if not items:
@@ -79,6 +83,7 @@ def fetch_categories():
 @app.route('/export/rozetka.xml', methods=['GET'])
 def rozetka_feed():
     try:
+        # Fetch data
         products = fetch_products()
         categories_list = fetch_categories()
 
@@ -93,16 +98,17 @@ def rozetka_feed():
         currencies = ET.SubElement(shop, 'currencies')
         ET.SubElement(currencies, 'currency', id='UAH', rate='1')
 
-        # Categories
-        cats_elem = ET.SubElement(shop, 'categories')
-        for c in categories_list:
-            cid = c.get('id')
-            name = c.get('name') or c.get('title')
-            parent = c.get('parent_id')
-            attrs = {'id': str(cid)}
-            if parent:
-                attrs['parentId'] = str(parent)
-            ET.SubElement(cats_elem, 'category', **attrs).text = name
+        # Categories (optional)
+        if categories_list:
+            cats_elem = ET.SubElement(shop, 'categories')
+            for c in categories_list:
+                cid = c.get('id')
+                name = c.get('name') or c.get('title')
+                parent = c.get('parent_id')
+                attrs = {'id': str(cid)}
+                if parent:
+                    attrs['parentId'] = str(parent)
+                ET.SubElement(cats_elem, 'category', **attrs).text = name
 
         # Offers section
         offers = ET.SubElement(shop, 'offers')
