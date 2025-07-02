@@ -265,6 +265,23 @@ def rozetka_feed():
                 category_id = (var_attr.get('category_id') or prod_attr.get('category_id'))
                 if category_id:
                     create_xml_element(offer, 'categoryId', str(category_id))
+                                # Color and size from custom_fields
+                color = None
+                size = None
+                for cf in var_attr.get('custom_fields', []):
+                    uuid = cf.get('uuid', '').lower()
+                    value = cf.get('value')
+                    if not value:
+                        continue
+                    if 'color' in uuid or 'колір' in uuid:
+                        color = value
+                    if 'size' in uuid or 'розмір' in uuid:
+                        size = value
+                if color:
+                    create_xml_element(offer, 'color', color)
+                if size:
+                    create_xml_element(offer, 'size', size)
+
                 custom_fields = var_attr.get('custom_fields', [])
                 if isinstance(custom_fields, list):
                     for cf in custom_fields:
