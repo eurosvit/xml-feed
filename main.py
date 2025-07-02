@@ -115,34 +115,16 @@ def rozetka_feed():
             off = ET.SubElement(offers_el, 'offer', id=sku, available=('true' if qty>0 else 'false'))
             create_xml_element(off, 'sku', sku)
             create_xml_element(off, 'vendor', os.getenv('COMPANY_NAME', 'Znana'))
-            # color & size from custom_fields
-                color = None
-                size = None
-                for cf in item.get('custom_fields', []):
-                    name_field = cf.get('name', '').lower()
-                    if 'колір' in name_field or 'color' in name_field:
-                        color = cf.get('value')
-                    if 'розмір' in name_field or 'size' in name_field:
-                        size = cf.get('value')
-                if color:
-                    create_xml_element(off, 'color', color)
-                if size:
-                    create_xml_element(off, 'size', size)
-            create_xml_element(off, 'price', f"{price:.2f}")
-            create_xml_element(off, 'stock', qty)
-            create_xml_element(off, 'name', item.get('name'))
-            if desc: create_xml_element(off, 'description', desc)
-            if item.get('barcode'): create_xml_element(off, 'barcode', item['barcode'])
-            create_xml_element(off, 'currencyId', item.get('currency_code', 'UAH'))
-            for pic in pics:
-                create_xml_element(off, 'picture', pic)
-
-    xml_str = ET.tostring(root, encoding='unicode')
-    return Response('<?xml version="1.0" encoding="UTF-8"?>\n'+xml_str,
-                    mimetype='application/xml; charset=utf-8')
-
-@app.route('/health')
-def health(): return Response('OK')
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT',8080)))
+                        # color & size from custom_fields
+            color = None
+            size = None
+            for cf in item.get('custom_fields', []):
+                name_field = cf.get('name', '').lower()
+                if 'колір' in name_field or 'color' in name_field:
+                    color = cf.get('value')
+                if 'розмір' in name_field or 'size' in name_field:
+                    size = cf.get('value')
+            if color:
+                create_xml_element(off, 'color', color)
+            if size:
+                create_xml_element(off, 'size', size)
