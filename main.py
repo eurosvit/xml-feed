@@ -11,24 +11,26 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Конфігурація через змінні оточення
+# Конфігурація з середовища
 API_URL = os.getenv('KEYCRM_API_URL', 'https://openapi.keycrm.app/v1')
 API_KEY = os.getenv('KEYCRM_API_KEY')
 if not API_KEY:
     app.logger.error('KEYCRM_API_KEY is not set')
     raise RuntimeError('Environment variable KEYCRM_API_KEY is required')
 
+# Заголовки для запитів
 HEADERS = {
     'Authorization': f'Bearer {API_KEY}',
     'Accept': 'application/json'
 }
 
-# Отримуємо всі товари (SKU) як окремі пропозиції
+# Отримуємо всі товари з Key CRM (кожен товар = один SKU)
 def fetch_products():
     products = []
     page = 1
     per_page = 100
     while True:
+        app.logger.info(f'Fetching products page {page}')
         resp = requests.get(
             f"{API_URL}/products",
             headers=HEADERS,
@@ -46,13 +48,15 @@ def fetch_products():
         if not pagination.get('next_page'):
             break
         page += 1
+    app.logger.info(f'Total SKUs fetched: {len(products)}')
     return products
 
 @app.route('/export/rozetka.xml', methods=['GET'])
 def rozetka_feed():
     try:
         products = fetch_products()
-        # Створюємо XML
+
+        # Генеруємо YML
         root = ET.Element('yml_catalog', date=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
         shop = ET.SubElement(root, 'shop')
         ET.SubElement(shop, 'name').text = os.getenv('SHOP_NAME', 'Znana')
@@ -69,30 +73,29 @@ def rozetka_feed():
             sku = p.get('sku')
             if not sku:
                 continue
-            available = 'true' if p.get('stock', 0) > 0 else 'false'
-            offer = ET.SubElement(offers, 'offer', id=sku, available=available)
+            offer = ET.SubElement(offers, 'offer', id=sku, available=('true' if p.get('stock', 0) > 0 else 'false'))
 
-            # Ціна та залишок
+            # Ціна і залишок
             ET.SubElement(offer, 'price').text = f"{p.get('price', 0):.2f}"
             ET.SubElement(offer, 'stock').text = str(p.get('stock', 0))
 
-            # Назва та опис
+            # Назва і опис
             if p.get('name'):
                 ET.SubElement(offer, 'name').text = p['name']
             if p.get('description'):
                 ET.SubElement(offer, 'description').text = p['description']
 
-            # Штрихкод (barcode)
+            # Штрихкод
             if p.get('barcode'):
                 ET.SubElement(offer, 'barcode').text = p['barcode']
 
-            # Валюта та закупівельна ціна
+            # Валюта і закупівельна ціна
             if p.get('currency_code'):
                 ET.SubElement(offer, 'currencyId').text = p['currency_code']
             if p.get('purchased_price') is not None:
                 ET.SubElement(offer, 'purchase_price').text = f"{p['purchased_price']:.2f}"
 
-            # Одиниця виміру, вага, розміри
+            # Одиниця, габарити, вага
             if p.get('unit_type'):
                 ET.SubElement(offer, 'unit').text = p['unit_type']
             for dim in ('weight', 'length', 'width', 'height'):
@@ -103,7 +106,7 @@ def rozetka_feed():
             if p.get('category_id'):
                 ET.SubElement(offer, 'categoryId').text = str(p['category_id'])
 
-            # Кастомні поля
+            # Кастомні поля (наприклад color, size)
             for cf in p.get('custom_fields', []):
                 if cf.get('uuid') and cf.get('value'):
                     ET.SubElement(offer, 'param', name=cf['uuid']).text = cf['value']
@@ -112,8 +115,9 @@ def rozetka_feed():
             for url in p.get('pictures', []):
                 ET.SubElement(offer, 'picture').text = url
 
-        xml_bytes = ET.tostring(root, encoding='utf-8', xml_declaration=True)
-        return Response(xml_bytes, mimetype='application/xml')
+        xml_data = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+        return Response(xml_data, mimetype='application/xml')
+
     except Exception as e:
         app.logger.error(f"Error generating feed: {e}")
         return Response("Internal Server Error", status=500)
