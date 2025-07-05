@@ -56,7 +56,7 @@ def safe_request(url, headers, params=None, max_retries=3, delay=1):
     return None
 
 def fetch_products():
-    """Fetch all products including archived, with improved pagination and error handling"""
+    """Fetch all products including archived, with robust pagination and error handling"""
     products = []
     page = 1
     per_page = 100  # maximum per page to reduce number of requests
@@ -81,21 +81,28 @@ def fetch_products():
         if not items:
             logger.info("No more products found")
             break
+
         products.extend(items)
         logger.info(f"Fetched {len(items)} products from page {page}")
 
-        # Handle pagination robustly: some APIs use different metadata keys
+        # Try API-driven pagination first
         meta = payload.get('meta', {})
         pagination = meta.get('pagination', {})
-        # attempt to retrieve current and last page values
         current = pagination.get('current_page') or pagination.get('page')
-        last    = pagination.get('last_page')    or pagination.get('total_pages')
-        logger.info(f"Page {current} of {last}")
+        last = pagination.get('last_page') or pagination.get('total_pages')
 
-        # If metadata missing or we've reached the last page, stop
-        if current is None or last is None or current >= last:
-            break
-        page = int(current) + 1
+        # If metadata present, use it
+        if current is not None and last is not None:
+            logger.info(f"Page {current} of {last}")
+            if current >= last:
+                break
+            page = int(current) + 1
+        else:
+            # Fallback: if fewer items than per_page, we've reached end
+            if len(items) < per_page:
+                break
+            page += 1
+
         time.sleep(0.1)  # avoid rate limiting
 
     logger.info(f"Total products fetched: {len(products)}")
