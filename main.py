@@ -84,16 +84,18 @@ def fetch_products():
         products.extend(items)
         logger.info(f"Fetched {len(items)} products from page {page}")
 
-        # Handle pagination robustly
+        # Handle pagination robustly: some APIs use different metadata keys
         meta = payload.get('meta', {})
-        pag = meta.get('pagination', {})
-        # Some API versions use current_page/page and last_page/total_pages
-        current = pag.get('current_page') or pag.get('page')
-        last    = pag.get('last_page')    or pag.get('total_pages')
+        pagination = meta.get('pagination', {})
+        # attempt to retrieve current and last page values
+        current = pagination.get('current_page') or pagination.get('page')
+        last    = pagination.get('last_page')    or pagination.get('total_pages')
         logger.info(f"Page {current} of {last}")
+
+        # If metadata missing or we've reached the last page, stop
         if current is None or last is None or current >= last:
             break
-        page = current + 1
+        page = int(current) + 1
         time.sleep(0.1)  # avoid rate limiting
 
     logger.info(f"Total products fetched: {len(products)}")
