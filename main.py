@@ -92,30 +92,43 @@ def fetch_products():
         products.extend(items)
         logger.info(f"Fetched {len(items)} products from page {page} (total: {len(products)})")
 
-        # Improved pagination handling
+        # DETAILED pagination debugging
         meta = payload.get('meta', {})
         pagination = meta.get('pagination', {})
+        
+        logger.info(f"PAGINATION DEBUG - Page {page}:")
+        logger.info(f"  Full meta: {meta}")
+        logger.info(f"  Pagination keys: {list(pagination.keys())}")
+        logger.info(f"  Items received: {len(items)}")
+        logger.info(f"  Per page setting: {per_page}")
         
         # Check multiple pagination indicators
         current = pagination.get('current_page') or pagination.get('page') or page
         last = pagination.get('last_page') or pagination.get('total_pages')
         has_next = pagination.get('has_next_page') or pagination.get('next_page')
+        total = pagination.get('total') or pagination.get('total_count')
         
-        # Multiple exit conditions
+        logger.info(f"  Current page: {current}")
+        logger.info(f"  Last page: {last}")
+        logger.info(f"  Has next: {has_next}")
+        logger.info(f"  Total items: {total}")
+        
+        # Multiple exit conditions with detailed logging
         if last is not None and int(current) >= int(last):
-            logger.info(f"Reached last page {last}")
+            logger.info(f"EXIT: Reached last page {last}")
             break
         elif has_next is False:
-            logger.info("No more pages available")
+            logger.info("EXIT: No more pages available (has_next=False)")
             break
         elif len(items) < per_page:
-            logger.info(f"Retrieved {len(items)} items, less than per_page {per_page}, assuming end")
+            logger.info(f"EXIT: Retrieved {len(items)} items, less than per_page {per_page}")
             break
         
+        logger.info(f"CONTINUING to page {page + 1}")
         page += 1
         time.sleep(0.2)  # Slightly longer delay to avoid rate limiting
 
-    logger.info(f"Total products fetched: {len(products)}")
+    logger.info(f"FINAL: Total products fetched: {len(products)}")
     return products
 
 def fetch_offers_for_product(product_id):
@@ -559,26 +572,55 @@ def debug_stats():
     try:
         import json
         
-        # Get total products count
+        # Get total products count with detailed pagination info
         products_resp = safe_request(
             f"{API_URL}/products", 
             HEADERS, 
-            params={'per_page': 1, 'page': 1}
+            params={'per_page': 1, 'page': 1, 'filter[is_archived]': 'all'}
         )
         
         if not products_resp:
             return Response("Failed to fetch products", status=500)
         
         products_payload = products_resp.json()
-        products_meta = products_payload.get('meta', {}).get('pagination', {})
+        products_meta = products_payload.get('meta', {})
+        products_pagination = products_meta.get('pagination', {})
+        
+        # Test second page to see if pagination works
+        products_resp2 = safe_request(
+            f"{API_URL}/products", 
+            HEADERS, 
+            params={'per_page': 1, 'page': 2, 'filter[is_archived]': 'all'}
+        )
+        
+        page2_data = None
+        if products_resp2:
+            page2_payload = products_resp2.json()
+            page2_data = {
+                'has_data': bool(page2_payload.get('data')),
+                'data_count': len(page2_payload.get('data', [])),
+                'meta': page2_payload.get('meta', {})
+            }
         
         stats = {
-            'total_products': products_meta.get('total', 'unknown'),
-            'total_pages': products_meta.get('last_page', 'unknown'),
-            'current_page': products_meta.get('current_page', 1),
-            'per_page': products_meta.get('per_page', 'unknown'),
             'api_url': API_URL,
-            'has_api_key': bool(API_KEY)
+            'has_api_key': bool(API_KEY),
+            'page1_response': {
+                'data_count': len(products_payload.get('data', [])),
+                'meta_keys': list(products_meta.keys()),
+                'pagination_keys': list(products_pagination.keys()),
+                'pagination_values': products_pagination,
+                'full_meta': products_meta
+            },
+            'page2_test': page2_data,
+            'pagination_analysis': {
+                'total_products': products_pagination.get('total', 'unknown'),
+                'total_pages': products_pagination.get('last_page', 'unknown'),
+                'current_page': products_pagination.get('current_page', 1),
+                'per_page': products_pagination.get('per_page', 'unknown'),
+                'has_next': products_pagination.get('has_next_page', 'unknown'),
+                'next_page': products_pagination.get('next_page', 'unknown')
+            }
         }
         
         return Response(
@@ -589,6 +631,54 @@ def debug_stats():
     except Exception as e:
         logger.error(f"Debug stats error: {e}", exc_info=True)
         return Response(f"Debug stats error: {str(e)}", status=500)
+
+@app.route('/debug/pagination-test', methods=['GET'])
+def debug_pagination_test():
+    """Test pagination manually"""
+    try:
+        import json
+        
+        # Test first 3 pages
+        results = []
+        for page in range(1, 4):
+            resp = safe_request(
+                f"{API_URL}/products",
+                headers=HEADERS,
+                params={
+                    'per_page': 5,
+                    'page': page,
+                    'filter[is_archived]': 'all'
+                }
+            )
+            
+            if not resp:
+                results.append(f"Page {page}: Failed to fetch")
+                continue
+                
+            payload = resp.json()
+            data = payload.get('data', [])
+            meta = payload.get('meta', {})
+            pagination = meta.get('pagination', {})
+            
+            results.append({
+                'page': page,
+                'items_count': len(data),
+                'first_item_id': data[0].get('id') if data else None,
+                'pagination_info': pagination,
+                'has_next_page': pagination.get('has_next_page'),
+                'current_page': pagination.get('current_page'),
+                'last_page': pagination.get('last_page'),
+                'total': pagination.get('total')
+            })
+        
+        return Response(
+            json.dumps(results, indent=2, ensure_ascii=False), 
+            mimetype='application/json; charset=utf-8'
+        )
+        
+    except Exception as e:
+        logger.error(f"Pagination test error: {e}", exc_info=True)
+        return Response(f"Pagination test error: {str(e)}", status=500)
 
 @app.route('/health', methods=['GET'])
 def health_check():
