@@ -18,14 +18,13 @@ API_KEY = os.getenv('KEYCRM_API_KEY')
 
 HEADERS = {'Authorization': f'Bearer {API_KEY}'}
 
-
 def fetch_all_offers():
     offers = []
     page = 1
-    per_page = 100  # MAX = 100 за документацією KeyCRM
+    per_page = 50  # Reduced page size to avoid timeouts
     while True:
         logger.info(f"Fetching offers page {page}")
-        res = requests.get(f"{API_URL}/offers", headers=HEADERS, params={'page': page, 'per_page': per_page})
+        res = requests.get(f"{API_URL}/offers", headers=HEADERS, params={'page': page, 'limit': per_page})
         if res.status_code != 200:
             logger.warning(f"Error fetching offers: {res.status_code}")
             break
@@ -34,19 +33,18 @@ def fetch_all_offers():
         if not page_offers:
             break
         offers.extend(page_offers)
-        pagination = data.get('meta', {}).get('pagination', {})
-        if not pagination or pagination.get('current_page') >= pagination.get('last_page', page):
+        if len(page_offers) < per_page:
             break
         page += 1
         time.sleep(0.1)
+    logger.info(f"Total offers fetched: {len(offers)}")
     return offers
-
 
 def fetch_offer_stock():
     logger.info("Fetching offer stocks")
     stocks = {}
     page = 1
-    per_page = 50  # максимум за документацією
+    per_page = 50
     while True:
         res = requests.get(f"{API_URL}/offers/stocks", headers=HEADERS, params={'page': page, 'limit': per_page})
         if res.status_code != 200:
@@ -61,13 +59,12 @@ def fetch_offer_stock():
             quantity = entry.get('quantity', 0)
             if offer_id is not None:
                 stocks[offer_id] = quantity
-        pagination = data.get('meta', {}).get('pagination', {})
-        if not pagination or pagination.get('current_page') >= pagination.get('last_page', page):
+        if len(page_data) < per_page:
             break
         page += 1
         time.sleep(0.1)
+    logger.info(f"Total stock entries fetched: {len(stocks)}")
     return stocks
-
 
 def generate_xml():
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -116,7 +113,6 @@ def generate_xml():
 
     return ET.tostring(root, encoding="utf-8")
 
-
 @app.route("/export/rozetka.xml")
 def rozetka_feed():
     try:
@@ -125,7 +121,6 @@ def rozetka_feed():
     except Exception as e:
         logger.exception("Feed generation failed")
         return Response("Error generating feed", status=500)
-
 
 if __name__ == "__main__":
     app.run(debug=True)
