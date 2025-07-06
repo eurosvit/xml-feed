@@ -1,6 +1,10 @@
 from flask import Flask, Response
-import os, requests, xml.etree.ElementTree as ET, logging, time
+import os
+import requests
+import xml.etree.ElementTree as ET
 from datetime import datetime
+import logging
+import time
 
 try:
     from dotenv import load_dotenv
@@ -47,52 +51,33 @@ def fetch_products():
     products = []
     page = 1
     per_page = 50
-    max_pages = 1000
-
-    while page <= max_pages:
+    while True:
         logger.info(f"📦 Fetching products page {page}")
         resp = safe_request(
             f"{API_URL}/products",
             headers=HEADERS,
             params={
                 'per_page': per_page,
-                'page': page,
-                'filter[is_archived]': 'all'
+                'page': page
+                # ❌ no filter[is_archived]
             }
         )
         if not resp:
-            logger.error(f"❌ Failed to fetch page {page}")
             break
-
         try:
             payload = resp.json()
         except Exception as e:
-            logger.error(f"❌ Invalid JSON on page {page}: {e}")
+            logger.error(f"❌ Invalid JSON: {e}")
             break
-
-        data = payload.get('data')
-        if not isinstance(data, list):
-            logger.error(f"❌ Unexpected 'data' format: {type(data)}")
-            break
-
+        data = payload.get('data', [])
         if not data:
-            logger.info(f"✅ No more data on page {page}")
             break
-
         products.extend(data)
-        meta = payload.get('meta', {}).get('pagination', {})
-        current = meta.get('current_page') or page
-        last = meta.get('last_page')
-        has_next = meta.get('has_next_page')
-
-        if last and int(current) >= int(last):
+        pagination = payload.get('meta', {}).get('pagination', {})
+        if not pagination.get('next_page') or pagination.get('current_page') >= pagination.get('last_page', 1):
             break
-        elif has_next is False:
-            break
-
         page += 1
         time.sleep(0.2)
-
     logger.info(f"✅ Total products fetched: {len(products)}")
     return products
 
@@ -100,63 +85,36 @@ def fetch_offers_for_product(product_id):
     offers = []
     page = 1
     per_page = 50
-
-    while page <= 100:
+    while True:
         resp = safe_request(
             f"{API_URL}/offers",
             headers=HEADERS,
-            params={'filter[product_id]': product_id, 'page': page, 'per_page': per_page}
+            params={
+                'filter[product_id]': product_id,
+                'per_page': per_page,
+                'page': page
+            }
         )
         if not resp:
             break
-
         try:
             payload = resp.json()
         except Exception as e:
             logger.error(f"Invalid offers JSON: {e}")
             break
-
         data = payload.get('data', [])
         if not data:
             break
-
         offers.extend(data)
-        meta = payload.get('meta', {}).get('pagination', {})
-        current = meta.get('current_page') or page
-        last = meta.get('last_page')
-        has_next = meta.get('has_next_page')
-
-        if last and int(current) >= int(last):
+        pagination = payload.get('meta', {}).get('pagination', {})
+        if not pagination.get('next_page') or pagination.get('current_page') >= pagination.get('last_page', 1):
             break
-        elif has_next is False:
-            break
-
         page += 1
         time.sleep(0.1)
-
     return offers
 
-def get_all_images(prod, var=None):
-    images = []
-
-    def extract(img_obj):
-        if isinstance(img_obj, list):
-            return img_obj
-        elif isinstance(img_obj, str):
-            return [img_obj]
-        return []
-
-    images += extract(prod.get('pictures') or prod.get('images') or prod.get('gallery') or [])
-    if var:
-        images += extract(var.get('pictures') or var.get('images') or var.get('gallery') or [])
-
-    seen = set()
-    return [x for x in images if x and not (x in seen or seen.add(x))]
-
 def safe_text(text):
-    if text is None:
-        return ""
-    return str(text).strip()
+    return str(text).strip() if text else ""
 
 def create_xml_element(parent, tag, text=None, **attrs):
     el = ET.SubElement(parent, tag, **attrs)
@@ -164,87 +122,92 @@ def create_xml_element(parent, tag, text=None, **attrs):
         el.text = safe_text(text)
     return el
 
-def generate_feed_xml():
-    products = fetch_products() or []
+@app.route('/export/rozetka.xml', methods=['GET'])
+def rozetka_feed():
+    try:
+        logger.info("🛒 Start XML feed generation")
+        products = fetch_products()
+        if not products:
+            return Response("No products", status=404)
 
-    root = ET.Element('yml_catalog', date=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
-    shop = ET.SubElement(root, 'shop')
-    create_xml_element(shop, 'name', os.getenv('SHOP_NAME', 'Znana'))
-    create_xml_element(shop, 'company', os.getenv('COMPANY_NAME', 'Znana'))
-    create_xml_element(shop, 'url', os.getenv('SHOP_URL', 'https://yourshop.ua'))
+        root = ET.Element('yml_catalog', date=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
+        shop = ET.SubElement(root, 'shop')
+        create_xml_element(shop, 'name', 'Znana')
+        create_xml_element(shop, 'company', 'Znana')
+        create_xml_element(shop, 'url', 'https://yourshop.ua')
+        ET.SubElement(shop, 'currencies')
+        ET.SubElement(shop, 'categories')
+        offers_el = ET.SubElement(shop, 'offers')
 
-    ET.SubElement(shop, 'currencies')
-    ET.SubElement(shop, 'categories')
-    offers_el = ET.SubElement(shop, 'offers')
+        total = 0
 
-    total = 0
+        for product in products:
+            prod_attr = product.get('attributes', product)
+            product_id = product.get('id')
+            product_name = prod_attr.get('name', f'Product {product_id}')
+            description = prod_attr.get('description') or prod_attr.get('desc', '')
+            common_images = prod_attr.get('pictures', []) or prod_attr.get('images', [])
 
-    for product in products:
-        prod_attr = product.get('attributes', product)
-        product_id = product.get('id')
-        variants = fetch_offers_for_product(product_id)
+            product_price = prod_attr.get('price') or prod_attr.get('selling_price') or 0
+            product_stock = prod_attr.get('stock') or prod_attr.get('quantity') or 0
 
-        for var in variants:
-            var_attr = var.get('attributes', var)
-            sku = var_attr.get('sku') or var_attr.get('article') or var_attr.get('vendor_code') or str(var.get('id'))
-            if not sku:
+            variants = fetch_offers_for_product(product_id)
+
+            if not variants:
+                # fallback to product
+                offer = ET.SubElement(offers_el, 'offer', id=str(product_id), available='true' if product_stock > 0 else 'false')
+                create_xml_element(offer, 'name', product_name)
+                create_xml_element(offer, 'description', description)
+                create_xml_element(offer, 'price', f"{float(product_price):.2f}")
+                create_xml_element(offer, 'stock', str(product_stock))
+                create_xml_element(offer, 'currencyId', 'UAH')
+                for url in common_images:
+                    create_xml_element(offer, 'picture', url)
+                total += 1
                 continue
 
-            try:
-                stock = int(float(var_attr.get('stock') or var_attr.get('quantity') or 0))
-            except:
-                stock = 0
+            for var in variants:
+                var_attr = var.get('attributes', var)
+                sku = var_attr.get('sku') or var_attr.get('vendor_code') or str(var.get('id'))
+                if not sku:
+                    continue
+                stock = var_attr.get('stock') or var_attr.get('quantity') or 0
+                price = var_attr.get('price') or var_attr.get('selling_price') or product_price
+                try:
+                    price = float(price)
+                except:
+                    price = 0.0
 
-            price = float(var_attr.get('price') or var_attr.get('selling_price') or 0)
-            available = 'true' if stock > 0 else 'false'
+                offer = ET.SubElement(offers_el, 'offer', id=str(sku), available='true' if stock > 0 else 'false')
+                create_xml_element(offer, 'name', var_attr.get('name') or product_name)
+                create_xml_element(offer, 'description', var_attr.get('description') or description)
+                create_xml_element(offer, 'price', f"{price:.2f}")
+                create_xml_element(offer, 'stock', str(stock))
+                create_xml_element(offer, 'currencyId', var_attr.get('currency_code', 'UAH'))
 
-            offer = ET.SubElement(offers_el, 'offer', id=sku, available=available)
-            create_xml_element(offer, 'price', f"{price:.2f}")
+                if var_attr.get('old_price'):
+                    try:
+                        old = float(var_attr['old_price'])
+                        if old > price:
+                            create_xml_element(offer, 'oldprice', f"{old:.2f}")
+                    except: pass
 
-            old = var_attr.get('old_price') or var_attr.get('discount_price')
-            try:
-                if old and float(old) > price:
-                    create_xml_element(offer, 'oldprice', f"{float(old):.2f}")
-            except:
-                pass
+                # pictures
+                pics = var_attr.get('pictures') or var_attr.get('images') or []
+                if isinstance(pics, list):
+                    for url in pics:
+                        create_xml_element(offer, 'picture', url)
+                else:
+                    for url in common_images:
+                        create_xml_element(offer, 'picture', url)
 
-            create_xml_element(offer, 'currencyId', var_attr.get('currency_code', 'UAH'))
-            create_xml_element(offer, 'stock', str(stock))
-            create_xml_element(offer, 'name', var_attr.get('name') or prod_attr.get('name'))
-            create_xml_element(offer, 'description', var_attr.get('description') or prod_attr.get('description', ''))
-            create_xml_element(offer, 'barcode', var_attr.get('barcode') or var_attr.get('ean'))
+                total += 1
 
-            cat_id = var_attr.get('category_id') or prod_attr.get('category_id')
-            if cat_id:
-                create_xml_element(offer, 'categoryId', str(cat_id))
-
-            for url in get_all_images(prod_attr, var_attr):
-                create_xml_element(offer, 'picture', url)
-
-            custom = var_attr.get('custom_fields', [])
-            for cf in custom:
-                name = cf.get('uuid')
-                val = cf.get('value')
-                if name and val:
-                    create_xml_element(offer, 'param', val, name=name)
-                    if 'color' in name.lower():
-                        create_xml_element(offer, 'color', val)
-                    if 'size' in name.lower():
-                        create_xml_element(offer, 'size', val)
-
-            total += 1
-
-    logger.info(f"✅ Generated {total} offers in XML")
-    xml_str = ET.tostring(root, encoding='unicode')
-    return f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_str}'
-
-@app.route('/feed.xml', methods=['GET'])
-def feed():
-    try:
-        xml = generate_feed_xml()
-        return Response(xml, mimetype='application/xml; charset=utf-8')
+        logger.info(f"✅ Generated XML feed with {total} offers")
+        xml = ET.tostring(root, encoding='unicode')
+        return Response(f'<?xml version="1.0" encoding="UTF-8"?>\n{xml}', mimetype='application/xml; charset=utf-8')
     except Exception as e:
-        logger.error(f"Feed generation error: {e}", exc_info=True)
+        logger.error(f"❌ XML feed error: {e}", exc_info=True)
         return Response("Internal Server Error", status=500)
 
 @app.route('/health', methods=['GET'])
