@@ -21,7 +21,7 @@ HEADERS = {'Authorization': f'Bearer {API_KEY}'}
 def fetch_all_offers():
     offers = []
     page = 1
-    per_page = 50  # Reduced page size to avoid timeouts
+    per_page = 50
     while True:
         logger.info(f"Fetching offers page {page}")
         res = requests.get(f"{API_URL}/offers", headers=HEADERS, params={'page': page, 'limit': per_page})
@@ -66,6 +66,15 @@ def fetch_offer_stock():
     logger.info(f"Total stock entries fetched: {len(stocks)}")
     return stocks
 
+def fetch_product_by_id(product_id):
+    try:
+        res = requests.get(f"{API_URL}/products/{product_id}", headers=HEADERS)
+        if res.status_code == 200:
+            return res.json().get('data', {})
+    except Exception as e:
+        logger.warning(f"Error fetching product {product_id}: {e}")
+    return {}
+
 def generate_xml():
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     root = ET.Element("yml_catalog", date=now)
@@ -91,22 +100,33 @@ def generate_xml():
     stocks = fetch_offer_stock()
     logger.info(f"Rendering {len(offers)} offers")
 
+    product_cache = {}
+
     for offer in offers:
-        if not offer.get("product"):
-            continue
-        product = offer["product"]
         offer_id = offer['id']
+        product_id = offer.get("product_id")
+        if not product_id:
+            continue
+
+        if product_id in product_cache:
+            product = product_cache[product_id]
+        else:
+            product = fetch_product_by_id(product_id)
+            product_cache[product_id] = product
+
+        product_attr = product.get("attributes", product)
+
         quantity = stocks.get(offer_id, offer.get("quantity", 0))
 
         offer_el = ET.SubElement(offers_el, "offer", id=str(offer_id), available="true" if quantity > 0 else "false")
-        ET.SubElement(offer_el, "name").text = product.get("name") or ""
+        ET.SubElement(offer_el, "name").text = product_attr.get("name") or offer.get("name") or ""
         ET.SubElement(offer_el, "price").text = str(offer.get("price", 0))
-        ET.SubElement(offer_el, "currencyId").text = product.get("currency_code", "UAH")
-        ET.SubElement(offer_el, "categoryId").text = str(product.get("category_id", 1))
+        ET.SubElement(offer_el, "currencyId").text = product_attr.get("currency_code", "UAH")
+        ET.SubElement(offer_el, "categoryId").text = str(product_attr.get("category_id", 1))
         ET.SubElement(offer_el, "stock").text = str(quantity)
         if offer.get("thumbnail_url"):
             ET.SubElement(offer_el, "picture").text = offer.get("thumbnail_url")
-        ET.SubElement(offer_el, "description").text = product.get("description") or ""
+        ET.SubElement(offer_el, "description").text = product_attr.get("description") or ""
 
         for prop in offer.get("properties", []):
             ET.SubElement(offer_el, "param", name=prop.get("name")).text = prop.get("value")
