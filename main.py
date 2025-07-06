@@ -4,6 +4,7 @@ import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
 import logging
+import time
 
 app = Flask(__name__)
 
@@ -17,10 +18,11 @@ API_KEY = os.getenv('KEYCRM_API_KEY')
 
 HEADERS = {'Authorization': f'Bearer {API_KEY}'}
 
-def fetch_offers():
+
+def fetch_all_offers():
     offers = []
     page = 1
-    per_page = 500  # запитуємо більше оферів
+    per_page = 55  # MAX = 100 за документацією KeyCRM
     while True:
         logger.info(f"Fetching offers page {page}")
         res = requests.get(f"{API_URL}/offers", headers=HEADERS, params={'page': page, 'per_page': per_page})
@@ -36,7 +38,36 @@ def fetch_offers():
         if not pagination or pagination.get('current_page') >= pagination.get('last_page', page):
             break
         page += 1
+        time.sleep(0.1)
     return offers
+
+
+def fetch_offer_stock():
+    logger.info("Fetching offer stocks")
+    stocks = {}
+    page = 1
+    per_page = 50  # максимум за документацією
+    while True:
+        res = requests.get(f"{API_URL}/offers/stocks", headers=HEADERS, params={'page': page, 'limit': per_page})
+        if res.status_code != 200:
+            logger.warning(f"Error fetching offer stocks: {res.status_code}")
+            break
+        data = res.json()
+        page_data = data.get('data', [])
+        if not page_data:
+            break
+        for entry in page_data:
+            offer_id = entry.get('offer_id')
+            quantity = entry.get('quantity', 0)
+            if offer_id is not None:
+                stocks[offer_id] = quantity
+        pagination = data.get('meta', {}).get('pagination', {})
+        if not pagination or pagination.get('current_page') >= pagination.get('last_page', page):
+            break
+        page += 1
+        time.sleep(0.1)
+    return stocks
+
 
 def generate_xml():
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -46,11 +77,9 @@ def generate_xml():
     ET.SubElement(shop, "company").text = "Znana"
     ET.SubElement(shop, "url").text = "https://yourshop.ua"
 
-    # Currency
     currencies = ET.SubElement(shop, "currencies")
     ET.SubElement(currencies, "currency", id="UAH", rate="1")
 
-    # Categories (hardcoded example)
     categories = ET.SubElement(shop, "categories")
     category_names = [
         "Комплекти", "Легінси", "Лонгсліви", "Майки та футболки",
@@ -60,31 +89,33 @@ def generate_xml():
     for i, name in enumerate(category_names, start=1):
         ET.SubElement(categories, "category", id=str(i)).text = name
 
-    # Offers
     offers_el = ET.SubElement(shop, "offers")
-    offers = fetch_offers()
+    offers = fetch_all_offers()
+    stocks = fetch_offer_stock()
     logger.info(f"Rendering {len(offers)} offers")
 
     for offer in offers:
         if not offer.get("product"):
             continue
         product = offer["product"]
+        offer_id = offer['id']
+        quantity = stocks.get(offer_id, offer.get("quantity", 0))
 
-        offer_el = ET.SubElement(offers_el, "offer", id=str(offer['id']))
+        offer_el = ET.SubElement(offers_el, "offer", id=str(offer_id), available="true" if quantity > 0 else "false")
         ET.SubElement(offer_el, "name").text = product.get("name") or ""
         ET.SubElement(offer_el, "price").text = str(offer.get("price", 0))
         ET.SubElement(offer_el, "currencyId").text = product.get("currency_code", "UAH")
         ET.SubElement(offer_el, "categoryId").text = str(product.get("category_id", 1))
-        ET.SubElement(offer_el, "quantity").text = str(offer.get("quantity", 0))
+        ET.SubElement(offer_el, "stock").text = str(quantity)
         if offer.get("thumbnail_url"):
             ET.SubElement(offer_el, "picture").text = offer.get("thumbnail_url")
         ET.SubElement(offer_el, "description").text = product.get("description") or ""
 
-        # Params
         for prop in offer.get("properties", []):
             ET.SubElement(offer_el, "param", name=prop.get("name")).text = prop.get("value")
 
     return ET.tostring(root, encoding="utf-8")
+
 
 @app.route("/export/rozetka.xml")
 def rozetka_feed():
@@ -94,6 +125,7 @@ def rozetka_feed():
     except Exception as e:
         logger.exception("Feed generation failed")
         return Response("Error generating feed", status=500)
+
 
 if __name__ == "__main__":
     app.run(debug=True)
