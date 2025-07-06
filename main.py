@@ -128,7 +128,7 @@ def generate_xml():
         ET.SubElement(offer_el, "stock").text = str(quantity)
         if offer.get("thumbnail_url"):
             ET.SubElement(offer_el, "picture").text = offer.get("thumbnail_url")
-        ET.SubElement(offer_el, "description").text = product_description
+        ET.SubElement(offer_el, "description").text = product_description or "Опис відсутній"
 
         sku = offer.get("sku") or offer.get("article") or offer.get("vendor_code") or offer.get("code")
         if sku:
