@@ -114,19 +114,25 @@ def generate_xml():
             product = fetch_product_by_id(product_id)
             product_cache[product_id] = product
 
-        product_attr = product.get("attributes", product)
+        product_attr = product.get("attributes", {})
+        product_name = product.get("name") or offer.get("name") or ""
+        product_description = product.get("description") or product_attr.get("description") or ""
 
         quantity = stocks.get(offer_id, offer.get("quantity", 0))
 
         offer_el = ET.SubElement(offers_el, "offer", id=str(offer_id), available="true" if quantity > 0 else "false")
-        ET.SubElement(offer_el, "name").text = product_attr.get("name") or offer.get("name") or ""
+        ET.SubElement(offer_el, "name").text = product_name
         ET.SubElement(offer_el, "price").text = str(offer.get("price", 0))
         ET.SubElement(offer_el, "currencyId").text = product_attr.get("currency_code", "UAH")
         ET.SubElement(offer_el, "categoryId").text = str(product_attr.get("category_id", 1))
         ET.SubElement(offer_el, "stock").text = str(quantity)
         if offer.get("thumbnail_url"):
             ET.SubElement(offer_el, "picture").text = offer.get("thumbnail_url")
-        ET.SubElement(offer_el, "description").text = product_attr.get("description") or ""
+        ET.SubElement(offer_el, "description").text = product_description
+
+        sku = offer.get("sku") or offer.get("article") or offer.get("vendor_code") or offer.get("code")
+        if sku:
+            ET.SubElement(offer_el, "vendorCode").text = str(sku)
 
         for prop in offer.get("properties", []):
             ET.SubElement(offer_el, "param", name=prop.get("name")).text = prop.get("value")
