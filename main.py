@@ -20,7 +20,7 @@ HEADERS = {'Authorization': f'Bearer {API_KEY}'}
 def fetch_offers():
     offers = []
     page = 1
-    per_page = 100  # запитуємо більше оферів
+    per_page = 500  # запитуємо більше оферів
     while True:
         logger.info(f"Fetching offers page {page}")
         res = requests.get(f"{API_URL}/offers", headers=HEADERS, params={'page': page, 'per_page': per_page})
