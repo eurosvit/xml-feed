@@ -89,7 +89,7 @@ def generate_xml():
 
         # Назва, опис, виробник напряму з offer
         name = offer.get("name") or offer_attr.get("name") or f"Offer {offer_id}"
-        description = offer.get("description") or offer_attr.get("description") or offer_attr.get("desc") or "Опис відсутній"
+        description = offer_attr.get("description", '') or offer_attr.get("desc", '') or "Опис відсутній"
         price = offer.get("price", 0)
         currency = offer_attr.get("currency_code", "UAH")
         sku = offer.get("sku") or offer.get("article") or offer.get("vendor_code") or offer.get("code")
