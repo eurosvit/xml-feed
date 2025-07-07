@@ -86,14 +86,7 @@ def generate_xml():
     currencies = ET.SubElement(shop, "currencies")
     ET.SubElement(currencies, "currency", id="UAH", rate="1")
 
-    categories = ET.SubElement(shop, "categories")
-    category_names = [
-        "Комплекти", "Легінси", "Лонгсліви", "Майки та футболки",
-        "Нижня білизна", "Нічні сорочки", "Піжами",
-        "Сукні", "Халати", "Штани"
-    ]
-    for i, name in enumerate(category_names, start=1):
-        ET.SubElement(categories, "category", id=str(i)).text = name
+    # Skip categories section
 
     offers_el = ET.SubElement(shop, "offers")
     offers = fetch_all_offers()
@@ -116,7 +109,8 @@ def generate_xml():
 
         product_attr = product.get("attributes", {})
         product_name = product.get("name") or offer.get("name") or ""
-        product_description = product.get("description") or product_attr.get("description") or ""
+        product_description = product.get("description") or product_attr.get("description") or "Опис відсутній"
+        product_vendor = product.get("vendor") or product.get("vendor_name") or ""
 
         quantity = stocks.get(offer_id, offer.get("quantity", 0))
 
@@ -124,11 +118,13 @@ def generate_xml():
         ET.SubElement(offer_el, "name").text = product_name
         ET.SubElement(offer_el, "price").text = str(offer.get("price", 0))
         ET.SubElement(offer_el, "currencyId").text = product_attr.get("currency_code", "UAH")
-        ET.SubElement(offer_el, "categoryId").text = str(product_attr.get("category_id", 1))
         ET.SubElement(offer_el, "stock").text = str(quantity)
+
         if offer.get("thumbnail_url"):
             ET.SubElement(offer_el, "picture").text = offer.get("thumbnail_url")
-        ET.SubElement(offer_el, "description").text = product_description or "Опис відсутній"
+
+        ET.SubElement(offer_el, "description").text = product_description
+        ET.SubElement(offer_el, "vendor").text = product_vendor
 
         sku = offer.get("sku") or offer.get("article") or offer.get("vendor_code") or offer.get("code")
         if sku:
