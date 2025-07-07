@@ -86,8 +86,6 @@ def generate_xml():
     currencies = ET.SubElement(shop, "currencies")
     ET.SubElement(currencies, "currency", id="UAH", rate="1")
 
-    # Skip categories section
-
     offers_el = ET.SubElement(shop, "offers")
     offers = fetch_all_offers()
     stocks = fetch_offer_stock()
@@ -110,7 +108,7 @@ def generate_xml():
         product_attr = product.get("attributes", {})
         product_name = product.get("name") or offer.get("name") or ""
         product_description = product.get("description") or product_attr.get("description") or "Опис відсутній"
-        product_vendor = product.get("vendor") or product.get("vendor_name") or ""
+        product_vendor = product.get("vendor") or product.get("vendor_name") or "Znana"
 
         quantity = stocks.get(offer_id, offer.get("quantity", 0))
 
