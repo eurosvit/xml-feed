@@ -22,7 +22,7 @@ def fetch_all_offers():
     page = 1
     per_page = 50
     while True:
-        res = requests.get(f"{API_URL}/offers", headers=HEADERS, params={'page': page, 'limit': per_page})
+        res = requests.get(f"{API_URL}/offers", headers=HEADERS, params={'page': page, 'limit': per_page, 'include': 'product'})
         if res.status_code != 200:
             break
         data = res.json()
@@ -56,15 +56,6 @@ def fetch_offer_stock():
         time.sleep(0.1)
     return stocks
 
-def fetch_product_by_id(product_id):
-    try:
-        res = requests.get(f"{API_URL}/products/{product_id}", headers=HEADERS)
-        if res.status_code == 200:
-            return res.json().get('data', {})
-    except:
-        pass
-    return {}
-
 def generate_xml():
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     root = ET.Element("yml_catalog", date=now)
@@ -78,34 +69,30 @@ def generate_xml():
 
     offers = fetch_all_offers()
     stocks = fetch_offer_stock()
-    product_cache = {}
 
     for offer in offers:
         offer_id = offer.get("id")
-        product_id = offer.get("product_id")
         quantity = stocks.get(offer_id, offer.get("quantity", 0))
-
         offer_attr = offer.get("attributes", {})
+        product_data = offer.get("product", {})
 
-        # Назва, опис, виробник напряму з offer
-        name = offer.get("name") or offer_attr.get("name") or f"Offer {offer_id}"
-        description = offer_attr.get("description", '') or offer_attr.get("desc", '') or "Опис відсутній"
+        # ✅ Назва та опис з offer["product"]
+        name = (
+            product_data.get("name") or
+            offer.get("name") or
+            f"Offer {offer_id}"
+        )
+
+        description = (
+            product_data.get("description") or
+            offer.get("description") or
+            "Опис відсутній"
+        )
+
         price = offer.get("price", 0)
         currency = offer_attr.get("currency_code", "UAH")
         sku = offer.get("sku") or offer.get("article") or offer.get("vendor_code") or offer.get("code")
-
-        # Виробник — через продукт
-        vendor = "Znana"
-        if product_id:
-            if product_id in product_cache:
-                product = product_cache[product_id]
-            else:
-                product = fetch_product_by_id(product_id)
-                product_cache[product_id] = product
-            for cf in product.get("custom_fields", []):
-                if cf.get("uuid") in ["Виробник", "vendor", "brand"] and cf.get("value"):
-                    vendor = cf["value"]
-                    break
+        vendor = product_data.get("vendor") or product_data.get("vendor_name") or "Znana"
 
         offer_el = ET.SubElement(offers_el, "offer", id=str(offer_id), available="true" if quantity > 0 else "false")
         ET.SubElement(offer_el, "name").text = name
