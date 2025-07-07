@@ -106,27 +106,12 @@ def generate_xml():
             product_cache[product_id] = product
 
         product_attr = product.get("attributes", {})
-        offer_attr = offer.get("attributes", {})
 
-        # Назва
-        product_name = (
-            product.get("name") or
-            product_attr.get("name") or
-            offer.get("name") or
-            offer_attr.get("name") or
-            f"Product {product_id}"
-        )
+        # Назва і опис з attributes
+        product_name = product_attr.get("name") or f"Product {product_id}"
+        product_description = product_attr.get("description") or product_attr.get("desc") or "Опис відсутній"
 
-        # Опис
-        product_description = (
-            product.get("description") or
-            product_attr.get("description") or
-            offer.get("description") or
-            offer_attr.get("description") or
-            "Опис відсутній"
-        )
-
-        # Виробник
+        # Виробник з custom_fields
         product_vendor = "Znana"
         for cf in product.get("custom_fields", []):
             if cf.get("uuid") in ["Виробник", "vendor", "brand"] and cf.get("value"):
