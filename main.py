@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 # Env config
 API_URL = os.getenv('KEYCRM_API_URL', 'https://openapi.keycrm.app/v1')
 API_KEY = os.getenv('KEYCRM_API_KEY')
-
 HEADERS = {'Authorization': f'Bearer {API_KEY}'}
 
 def fetch_all_offers():
@@ -23,10 +22,8 @@ def fetch_all_offers():
     page = 1
     per_page = 50
     while True:
-        logger.info(f"Fetching offers page {page}")
         res = requests.get(f"{API_URL}/offers", headers=HEADERS, params={'page': page, 'limit': per_page})
         if res.status_code != 200:
-            logger.warning(f"Error fetching offers: {res.status_code}")
             break
         data = res.json()
         page_offers = data.get('data', [])
@@ -37,33 +34,26 @@ def fetch_all_offers():
             break
         page += 1
         time.sleep(0.1)
-    logger.info(f"Total offers fetched: {len(offers)}")
     return offers
 
 def fetch_offer_stock():
-    logger.info("Fetching offer stocks")
     stocks = {}
     page = 1
     per_page = 50
     while True:
         res = requests.get(f"{API_URL}/offers/stocks", headers=HEADERS, params={'page': page, 'limit': per_page})
         if res.status_code != 200:
-            logger.warning(f"Error fetching offer stocks: {res.status_code}")
             break
-        data = res.json()
-        page_data = data.get('data', [])
-        if not page_data:
-            break
-        for entry in page_data:
+        data = res.json().get('data', [])
+        for entry in data:
             offer_id = entry.get('offer_id')
             quantity = entry.get('quantity', 0)
             if offer_id is not None:
                 stocks[offer_id] = quantity
-        if len(page_data) < per_page:
+        if len(data) < per_page:
             break
         page += 1
         time.sleep(0.1)
-    logger.info(f"Total stock entries fetched: {len(stocks)}")
     return stocks
 
 def fetch_product_by_id(product_id):
@@ -71,8 +61,8 @@ def fetch_product_by_id(product_id):
         res = requests.get(f"{API_URL}/products/{product_id}", headers=HEADERS)
         if res.status_code == 200:
             return res.json().get('data', {})
-    except Exception as e:
-        logger.warning(f"Error fetching product {product_id}: {e}")
+    except:
+        pass
     return {}
 
 def generate_xml():
@@ -83,56 +73,52 @@ def generate_xml():
     ET.SubElement(shop, "company").text = "Znana"
     ET.SubElement(shop, "url").text = "https://yourshop.ua"
 
-    currencies = ET.SubElement(shop, "currencies")
-    ET.SubElement(currencies, "currency", id="UAH", rate="1")
-
+    ET.SubElement(ET.SubElement(shop, "currencies"), "currency", id="UAH", rate="1")
     offers_el = ET.SubElement(shop, "offers")
+
     offers = fetch_all_offers()
     stocks = fetch_offer_stock()
-    logger.info(f"Rendering {len(offers)} offers")
-
     product_cache = {}
 
     for offer in offers:
-        offer_id = offer['id']
+        offer_id = offer.get("id")
         product_id = offer.get("product_id")
-        if not product_id:
-            continue
-
-        if product_id in product_cache:
-            product = product_cache[product_id]
-        else:
-            product = fetch_product_by_id(product_id)
-            product_cache[product_id] = product
-
-        product_attr = product.get("attributes", {})
-
-        # Назва і опис з attributes
-        product_name = product_attr.get("name") or f"Product {product_id}"
-        product_description = product_attr.get("description") or product_attr.get("desc") or "Опис відсутній"
-
-        # Виробник з custom_fields
-        product_vendor = "Znana"
-        for cf in product.get("custom_fields", []):
-            if cf.get("uuid") in ["Виробник", "vendor", "brand"] and cf.get("value"):
-                product_vendor = cf["value"]
-                break
-
         quantity = stocks.get(offer_id, offer.get("quantity", 0))
 
+        offer_attr = offer.get("attributes", {})
+
+        # Назва, опис, виробник напряму з offer
+        name = offer.get("name") or offer_attr.get("name") or f"Offer {offer_id}"
+        description = offer.get("description") or offer_attr.get("description") or offer_attr.get("desc") or "Опис відсутній"
+        price = offer.get("price", 0)
+        currency = offer_attr.get("currency_code", "UAH")
+        sku = offer.get("sku") or offer.get("article") or offer.get("vendor_code") or offer.get("code")
+
+        # Виробник — через продукт
+        vendor = "Znana"
+        if product_id:
+            if product_id in product_cache:
+                product = product_cache[product_id]
+            else:
+                product = fetch_product_by_id(product_id)
+                product_cache[product_id] = product
+            for cf in product.get("custom_fields", []):
+                if cf.get("uuid") in ["Виробник", "vendor", "brand"] and cf.get("value"):
+                    vendor = cf["value"]
+                    break
+
         offer_el = ET.SubElement(offers_el, "offer", id=str(offer_id), available="true" if quantity > 0 else "false")
-        ET.SubElement(offer_el, "name").text = product_name
-        ET.SubElement(offer_el, "price").text = str(offer.get("price", 0))
-        ET.SubElement(offer_el, "currencyId").text = product_attr.get("currency_code", "UAH")
+        ET.SubElement(offer_el, "name").text = name
+        ET.SubElement(offer_el, "price").text = str(price)
+        ET.SubElement(offer_el, "currencyId").text = currency
         ET.SubElement(offer_el, "stock").text = str(quantity)
 
         if offer.get("thumbnail_url"):
             ET.SubElement(offer_el, "picture").text = offer.get("thumbnail_url")
 
-        ET.SubElement(offer_el, "description").text = product_description
-        ET.SubElement(offer_el, "vendor").text = product_vendor
+        ET.SubElement(offer_el, "description").text = description
+        ET.SubElement(offer_el, "vendor").text = vendor
 
-        sku = offer.get("sku") or offer.get("article") or offer.get("vendor_code") or offer.get("code")
         if sku:
             ET.SubElement(offer_el, "vendorCode").text = str(sku)
 
